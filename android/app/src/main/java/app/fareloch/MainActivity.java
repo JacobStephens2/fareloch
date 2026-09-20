@@ -1,4 +1,4 @@
-package page.stephens.macros;
+package app.fareloch;
 
 import android.Manifest;
 import android.content.pm.PackageManager;

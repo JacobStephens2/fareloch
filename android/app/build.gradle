@@ -7,10 +7,10 @@ if (keystorePropertiesFile.exists()) {
 }
 
 android {
-    namespace = "page.stephens.macros"
+    namespace = "app.fareloch"
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {
-        applicationId "page.stephens.macros"
+        applicationId "app.fareloch"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 5

@@ -5,7 +5,7 @@ plugins {
 }
 
 def twaManifest = [
-    applicationId: 'page.stephens.macros.twa',
+    applicationId: 'app.fareloch.twa',
     hostName: 'fareloch.app',
     launchUrl: '/',
     name: 'Fareloch',
@@ -40,13 +40,13 @@ android {
         }
     }
     compileSdkVersion 36
-    namespace "page.stephens.macros.twa"
+    namespace "app.fareloch.twa"
     defaultConfig {
-        applicationId "page.stephens.macros.twa"
+        applicationId "app.fareloch.twa"
         minSdkVersion 21
         targetSdkVersion 35
-        versionCode 3
-        versionName "1.1.1"
+        versionCode 4
+        versionName "1.2.0"
 
         resValue "string", "appName", twaManifest.name
         resValue "string", "launcherName", twaManifest.launcherName

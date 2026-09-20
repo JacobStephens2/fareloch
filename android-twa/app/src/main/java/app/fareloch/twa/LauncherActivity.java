@@ -1,4 +1,4 @@
-package page.stephens.macros.twa;
+package app.fareloch.twa;
 
 import android.content.pm.ActivityInfo;
 import android.net.Uri;

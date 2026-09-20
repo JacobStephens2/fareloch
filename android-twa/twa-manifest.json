@@ -1,5 +1,5 @@
 {
-  "packageId": "page.stephens.macros.twa",
+  "packageId": "app.fareloch.twa",
   "host": "fareloch.app",
   "name": "Fareloch",
   "launcherName": "Fareloch",
@@ -20,8 +20,8 @@
     "path": "./macros-keystore.jks",
     "alias": "macros"
   },
-  "appVersionCode": 3,
-  "appVersionName": "1.1.1",
+  "appVersionCode": 4,
+  "appVersionName": "1.2.0",
   "splashScreenFadeOutDuration": 300,
   "enableSiteSettingsShortcut": true,
   "isChromeOSOnly": false,

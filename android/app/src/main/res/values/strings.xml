@@ -2,6 +2,6 @@
 <resources>
     <string name="app_name">Fareloch</string>
     <string name="title_activity_main">Fareloch</string>
-    <string name="package_name">page.stephens.macros</string>
-    <string name="custom_url_scheme">page.stephens.macros</string>
+    <string name="package_name">app.fareloch</string>
+    <string name="custom_url_scheme">app.fareloch</string>
 </resources>
