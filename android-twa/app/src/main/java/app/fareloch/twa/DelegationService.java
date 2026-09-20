@@ -1,4 +1,4 @@
-package page.stephens.macros.twa;
+package app.fareloch.twa;
 
 public class DelegationService extends
         com.google.androidbrowserhelper.trusted.DelegationService {

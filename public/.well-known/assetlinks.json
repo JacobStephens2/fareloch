@@ -3,6 +3,16 @@
     "relation": ["delegate_permission/common.handle_all_urls"],
     "target": {
       "namespace": "android_app",
+      "package_name": "app.fareloch.twa",
+      "sha256_cert_fingerprints": [
+        "41:F8:38:8D:97:51:BC:8B:57:51:C8:79:7E:D4:2E:3D:C2:F1:5B:2E:B6:01:48:DB:10:48:95:35:D9:FD:48:18"
+      ]
+    }
+  },
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
       "package_name": "page.stephens.macros.twa",
       "sha256_cert_fingerprints": [
         "41:F8:38:8D:97:51:BC:8B:57:51:C8:79:7E:D4:2E:3D:C2:F1:5B:2E:B6:01:48:DB:10:48:95:35:D9:FD:48:18"

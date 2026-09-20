@@ -1,4 +1,4 @@
-package page.stephens.macros.twa;
+package app.fareloch.twa;
 
 public class Application extends android.app.Application {
     @Override
