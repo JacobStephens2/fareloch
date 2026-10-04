@@ -168,7 +168,8 @@ function recipeIngredients(id: number): RecipeIngredient[] {
 // since its manual macros override the ingredient sum (as server/src/recipe-ingredients.ts).
 function recipeIngredientRows(recipe: StoredRecipe): IngredientRow[] {
   if (recipe.manual_calories != null) return [];
-  return recipeIngredients(recipe.id).map((ing) => ({ food: ing, servings: ing.servings }));
+  // Rows saved before servings defaulted to 1 may hold 0 or nothing; count them as 1 serving.
+  return recipeIngredients(recipe.id).map((ing) => ({ food: ing, servings: ing.servings || 1 }));
 }
 
 function withNutrition(recipe: StoredRecipe): Recipe {
@@ -180,9 +181,10 @@ function withNutrition(recipe: StoredRecipe): Recipe {
   };
 }
 
-function toIngredientRows(
-  ingredients: { foodId: number; servings: number; qty?: number; unitLabel?: string }[],
-): RecipeIngredient[] {
+// One ingredient as the recipe editor sends it.
+type IngredientInput = { foodId: number; servings: number; qty?: number; unitLabel?: string };
+
+function buildRecipeIngredients(ingredients: IngredientInput[]): RecipeIngredient[] {
   const foods = getStore<Food[]>('guest_foods', []);
   return ingredients.map((ing) => {
     const food = foods.find((f) => f.id === ing.foodId);
@@ -519,7 +521,7 @@ export const localRecipes = {
     name: string;
     totalServings: number;
     servingUnit?: string;
-    ingredients: { foodId: number; servings: number; qty?: number; unitLabel?: string }[];
+    ingredients: IngredientInput[];
     manualCalories?: number | null;
     manualCarbsG?: number | null;
     manualProteinG?: number | null;
@@ -527,7 +529,7 @@ export const localRecipes = {
   }): Promise<{ recipe: { id: number } }> => {
     const recipes = getStore<StoredRecipe[]>('guest_recipes', []);
     const id = nextId();
-    const ingredients = toIngredientRows(data.ingredients);
+    const ingredients = buildRecipeIngredients(data.ingredients);
 
     const recipe: StoredRecipe = {
       id,
@@ -556,7 +558,7 @@ export const localRecipes = {
       name?: string;
       totalServings?: number;
       servingUnit?: string;
-      ingredients?: { foodId: number; servings: number; qty?: number; unitLabel?: string }[];
+      ingredients?: IngredientInput[];
       manualCalories?: number | null;
       manualCarbsG?: number | null;
       manualProteinG?: number | null;
@@ -578,7 +580,7 @@ export const localRecipes = {
 
     if (data.ingredients !== undefined) {
       const allIngredients = getStore<Record<string, RecipeIngredient[]>>('guest_recipe_ingredients', {});
-      allIngredients[id] = toIngredientRows(data.ingredients);
+      allIngredients[id] = buildRecipeIngredients(data.ingredients);
       setStore('guest_recipe_ingredients', allIngredients);
     }
 
@@ -600,20 +602,21 @@ export const localRecipes = {
     const recipes = getStore<StoredRecipe[]>('guest_recipes', []);
     const original = recipes.find((r) => r.id === id);
     if (!original) throw new Error('Recipe not found');
-    const allIngredients = getStore<Record<string, RecipeIngredient[]>>('guest_recipe_ingredients', {});
-    const origIngs = allIngredients[id] || [];
+    // Drop the stale perServing and ingredientCount a recipe saved before they moved to read time may carry.
+    const { perServing: _perServing, ingredientCount: _ingredientCount, ...stored } = original as Partial<Recipe> & StoredRecipe;
 
     const newId = nextId();
     const newRecipe: StoredRecipe = {
-      ...original,
+      ...stored,
       id: newId,
       name: original.name + ' (Copy)',
     };
 
-    const newIngs = origIngs.map((ing) => ({ ...ing, id: nextId() }));
+    const newIngs = recipeIngredients(id).map((ing) => ({ ...ing, id: nextId() }));
 
     recipes.push(newRecipe);
     setStore('guest_recipes', recipes);
+    const allIngredients = getStore<Record<string, RecipeIngredient[]>>('guest_recipe_ingredients', {});
     allIngredients[newId] = newIngs;
     setStore('guest_recipe_ingredients', allIngredients);
 
