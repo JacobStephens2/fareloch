@@ -1,4 +1,5 @@
 import type { User, Food, ExternalFood, MealLog, Recipe, RecipeIngredient, WeightLog } from './types';
+import { type IngredientRow, type Macros, macrosOf, scaleMacros, recipePerServing, roundMacros } from '../server/src/nutrition';
 
 const GUEST_KEY = 'guest_mode';
 const SAMPLE_KEY = 'guest_sample_active';
@@ -83,10 +84,7 @@ export function seedSampleData() {
     food_id: food.id,
     recipe_id: null,
     servings,
-    calories: food.calories * servings,
-    carbs_g: food.carbs_g * servings,
-    protein_g: food.protein_g * servings,
-    fat_g: food.fat_g * servings,
+    ...storedMealMacros(scaleMacros(macrosOf(food), servings)),
     note: null,
     food_name: food.name,
     food_brand: null,
@@ -150,6 +148,61 @@ function nextId(): number {
   const id = getStore('guest_next_id', 1);
   setStore('guest_next_id', id + 1);
   return id;
+}
+
+// The meal_logs macro columns for a logged quantity, in stored rounding, as the server stores them.
+function storedMealMacros(m: Macros): Pick<MealLog, 'calories' | 'carbs_g' | 'protein_g' | 'fat_g'> {
+  const stored = roundMacros(m, 'stored');
+  return { calories: stored.calories, carbs_g: stored.carbsG, protein_g: stored.proteinG, fat_g: stored.fatG };
+}
+
+// What guest_recipes holds. perServing and ingredientCount are computed on read, like the
+// server's recipes list; recipes saved before that may still carry stale copies of both.
+type StoredRecipe = Omit<Recipe, 'perServing' | 'ingredientCount'>;
+
+function recipeIngredients(id: number): RecipeIngredient[] {
+  return getStore<Record<string, RecipeIngredient[]>>('guest_recipe_ingredients', {})[id] || [];
+}
+
+// The ingredient rows recipePerServing totals. A manual-macro recipe reports none,
+// since its manual macros override the ingredient sum (as server/src/recipe-ingredients.ts).
+function recipeIngredientRows(recipe: StoredRecipe): IngredientRow[] {
+  if (recipe.manual_calories != null) return [];
+  return recipeIngredients(recipe.id).map((ing) => ({ food: ing, servings: ing.servings }));
+}
+
+function withNutrition(recipe: StoredRecipe): Recipe {
+  const ingredients = recipeIngredientRows(recipe);
+  return {
+    ...recipe,
+    ingredientCount: ingredients.length,
+    perServing: roundMacros(recipePerServing(recipe, ingredients), 'display'),
+  };
+}
+
+function toIngredientRows(
+  ingredients: { foodId: number; servings: number; qty?: number; unitLabel?: string }[],
+): RecipeIngredient[] {
+  const foods = getStore<Food[]>('guest_foods', []);
+  return ingredients.map((ing) => {
+    const food = foods.find((f) => f.id === ing.foodId);
+    return {
+      id: nextId(),
+      food_id: ing.foodId,
+      servings: ing.servings || 1,
+      qty: ing.qty || null,
+      unit_label: ing.unitLabel || null,
+      name: food?.name || '',
+      brand: food?.brand || null,
+      serving_size: food?.serving_size || 1,
+      serving_unit: food?.serving_unit || 'serving',
+      calories: food?.calories || 0,
+      carbs_g: food?.carbs_g || 0,
+      protein_g: food?.protein_g || 0,
+      fat_g: food?.fat_g || 0,
+      measures: food?.measures || null,
+    };
+  });
 }
 
 const DEFAULT_GUEST_USER: User = {
@@ -320,10 +373,12 @@ export const localMeals = {
   }): Promise<{ meal: MealLog }> => {
     const meals = getStore<MealLog[]>('guest_meals', []);
     const servings = data.servings || 1;
-    let calories = data.calories || 0;
-    let carbs_g = data.carbsG || 0;
-    let protein_g = data.proteinG || 0;
-    let fat_g = data.fatG || 0;
+    let macros: Macros = {
+      calories: data.calories || 0,
+      carbsG: data.carbsG || 0,
+      proteinG: data.proteinG || 0,
+      fatG: data.fatG || 0,
+    };
     let food_name: string | null = null;
     let food_brand: string | null = null;
     let serving_size: number | null = null;
@@ -334,10 +389,7 @@ export const localMeals = {
       const foods = getStore<Food[]>('guest_foods', []);
       const food = foods.find((f) => f.id === data.foodId);
       if (food) {
-        calories = food.calories * servings;
-        carbs_g = food.carbs_g * servings;
-        protein_g = food.protein_g * servings;
-        fat_g = food.fat_g * servings;
+        macros = scaleMacros(macrosOf(food), servings);
         food_name = food.name;
         food_brand = food.brand;
         serving_size = food.serving_size;
@@ -346,13 +398,10 @@ export const localMeals = {
     }
 
     if (data.recipeId) {
-      const recipes = getStore<Recipe[]>('guest_recipes', []);
+      const recipes = getStore<StoredRecipe[]>('guest_recipes', []);
       const recipe = recipes.find((r) => r.id === data.recipeId);
       if (recipe) {
-        calories = recipe.perServing.calories * servings;
-        carbs_g = recipe.perServing.carbsG * servings;
-        protein_g = recipe.perServing.proteinG * servings;
-        fat_g = recipe.perServing.fatG * servings;
+        macros = scaleMacros(recipePerServing(recipe, recipeIngredientRows(recipe)), servings);
         recipe_name = recipe.name;
       }
     }
@@ -365,10 +414,7 @@ export const localMeals = {
       food_id: data.foodId || null,
       recipe_id: data.recipeId || null,
       servings,
-      calories,
-      carbs_g,
-      protein_g,
-      fat_g,
+      ...storedMealMacros(macros),
       note: data.note || null,
       food_name,
       food_brand,
@@ -459,15 +505,14 @@ export const localMeals = {
 // Recipes
 export const localRecipes = {
   list: async (): Promise<{ recipes: Recipe[] }> => {
-    return { recipes: getStore<Recipe[]>('guest_recipes', []) };
+    return { recipes: getStore<StoredRecipe[]>('guest_recipes', []).map(withNutrition) };
   },
 
   get: async (id: number): Promise<{ recipe: Recipe; ingredients: RecipeIngredient[] }> => {
-    const recipes = getStore<Recipe[]>('guest_recipes', []);
+    const recipes = getStore<StoredRecipe[]>('guest_recipes', []);
     const recipe = recipes.find((r) => r.id === id);
     if (!recipe) throw new Error('Recipe not found');
-    const allIngredients = getStore<Record<string, RecipeIngredient[]>>('guest_recipe_ingredients', {});
-    return { recipe, ingredients: allIngredients[id] || [] };
+    return { recipe: withNutrition(recipe), ingredients: recipeIngredients(id) };
   },
 
   create: async (data: {
@@ -480,67 +525,20 @@ export const localRecipes = {
     manualProteinG?: number | null;
     manualFatG?: number | null;
   }): Promise<{ recipe: { id: number } }> => {
-    const recipes = getStore<Recipe[]>('guest_recipes', []);
-    const foods = getStore<Food[]>('guest_foods', []);
+    const recipes = getStore<StoredRecipe[]>('guest_recipes', []);
     const id = nextId();
+    const ingredients = toIngredientRows(data.ingredients);
 
-    const ingredients: RecipeIngredient[] = data.ingredients.map((ing) => {
-      const food = foods.find((f) => f.id === ing.foodId);
-      return {
-        id: nextId(),
-        food_id: ing.foodId,
-        servings: ing.servings,
-        qty: ing.qty || null,
-        unit_label: ing.unitLabel || null,
-        name: food?.name || '',
-        brand: food?.brand || null,
-        serving_size: food?.serving_size || 1,
-        serving_unit: food?.serving_unit || 'serving',
-        calories: food?.calories || 0,
-        carbs_g: food?.carbs_g || 0,
-        protein_g: food?.protein_g || 0,
-        fat_g: food?.fat_g || 0,
-        measures: food?.measures || null,
-      };
-    });
-
-    let totalCal = 0,
-      totalC = 0,
-      totalP = 0,
-      totalF = 0;
-    if (data.manualCalories != null) {
-      totalCal = data.manualCalories;
-      totalC = data.manualCarbsG || 0;
-      totalP = data.manualProteinG || 0;
-      totalF = data.manualFatG || 0;
-    } else {
-      for (const ing of ingredients) {
-        const origIng = data.ingredients.find((i) => i.foodId === ing.food_id);
-        totalCal += ing.calories * (origIng?.servings || 1);
-        totalC += ing.carbs_g * (origIng?.servings || 1);
-        totalP += ing.protein_g * (origIng?.servings || 1);
-        totalF += ing.fat_g * (origIng?.servings || 1);
-      }
-    }
-
-    const servings = data.totalServings || 1;
-    const recipe: Recipe = {
+    const recipe: StoredRecipe = {
       id,
       user_id: 0,
       name: data.name,
-      total_servings: servings,
+      total_servings: data.totalServings || 1,
       serving_unit: data.servingUnit || 'serving',
       manual_calories: data.manualCalories ?? null,
       manual_carbs_g: data.manualCarbsG ?? null,
       manual_protein_g: data.manualProteinG ?? null,
       manual_fat_g: data.manualFatG ?? null,
-      ingredientCount: ingredients.length,
-      perServing: {
-        calories: Math.round(totalCal / servings),
-        carbsG: Math.round((totalC / servings) * 10) / 10,
-        proteinG: Math.round((totalP / servings) * 10) / 10,
-        fatG: Math.round((totalF / servings) * 10) / 10,
-      },
     };
 
     recipes.push(recipe);
@@ -565,11 +563,10 @@ export const localRecipes = {
       manualFatG?: number | null;
     }
   ): Promise<{ success: boolean }> => {
-    const recipes = getStore<Recipe[]>('guest_recipes', []);
+    const recipes = getStore<StoredRecipe[]>('guest_recipes', []);
     const idx = recipes.findIndex((r) => r.id === id);
     if (idx === -1) throw new Error('Recipe not found');
     const recipe = recipes[idx];
-    const foods = getStore<Food[]>('guest_foods', []);
 
     if (data.name !== undefined) recipe.name = data.name;
     if (data.totalServings !== undefined) recipe.total_servings = data.totalServings;
@@ -580,56 +577,9 @@ export const localRecipes = {
     if (data.manualFatG !== undefined) recipe.manual_fat_g = data.manualFatG;
 
     if (data.ingredients !== undefined) {
-      const ingredients: RecipeIngredient[] = data.ingredients.map((ing) => {
-        const food = foods.find((f) => f.id === ing.foodId);
-        return {
-          id: nextId(),
-          food_id: ing.foodId,
-          servings: ing.servings,
-          qty: ing.qty || null,
-          unit_label: ing.unitLabel || null,
-          name: food?.name || '',
-          brand: food?.brand || null,
-          serving_size: food?.serving_size || 1,
-          serving_unit: food?.serving_unit || 'serving',
-          calories: food?.calories || 0,
-          carbs_g: food?.carbs_g || 0,
-          protein_g: food?.protein_g || 0,
-          fat_g: food?.fat_g || 0,
-          measures: food?.measures || null,
-        };
-      });
-
-      recipe.ingredientCount = ingredients.length;
       const allIngredients = getStore<Record<string, RecipeIngredient[]>>('guest_recipe_ingredients', {});
-      allIngredients[id] = ingredients;
+      allIngredients[id] = toIngredientRows(data.ingredients);
       setStore('guest_recipe_ingredients', allIngredients);
-
-      let totalCal = 0,
-        totalC = 0,
-        totalP = 0,
-        totalF = 0;
-      if (recipe.manual_calories != null) {
-        totalCal = recipe.manual_calories;
-        totalC = recipe.manual_carbs_g || 0;
-        totalP = recipe.manual_protein_g || 0;
-        totalF = recipe.manual_fat_g || 0;
-      } else {
-        for (const ing of ingredients) {
-          const origIng = data.ingredients!.find((i) => i.foodId === ing.food_id);
-          totalCal += ing.calories * (origIng?.servings || 1);
-          totalC += ing.carbs_g * (origIng?.servings || 1);
-          totalP += ing.protein_g * (origIng?.servings || 1);
-          totalF += ing.fat_g * (origIng?.servings || 1);
-        }
-      }
-      const s = recipe.total_servings || 1;
-      recipe.perServing = {
-        calories: Math.round(totalCal / s),
-        carbsG: Math.round((totalC / s) * 10) / 10,
-        proteinG: Math.round((totalP / s) * 10) / 10,
-        fatG: Math.round((totalF / s) * 10) / 10,
-      };
     }
 
     recipes[idx] = recipe;
@@ -638,7 +588,7 @@ export const localRecipes = {
   },
 
   delete: async (id: number): Promise<{ success: boolean }> => {
-    const recipes = getStore<Recipe[]>('guest_recipes', []).filter((r) => r.id !== id);
+    const recipes = getStore<StoredRecipe[]>('guest_recipes', []).filter((r) => r.id !== id);
     setStore('guest_recipes', recipes);
     const allIngredients = getStore<Record<string, RecipeIngredient[]>>('guest_recipe_ingredients', {});
     delete allIngredients[id];
@@ -647,14 +597,14 @@ export const localRecipes = {
   },
 
   copy: async (id: number): Promise<{ recipe: { id: number } }> => {
-    const recipes = getStore<Recipe[]>('guest_recipes', []);
+    const recipes = getStore<StoredRecipe[]>('guest_recipes', []);
     const original = recipes.find((r) => r.id === id);
     if (!original) throw new Error('Recipe not found');
     const allIngredients = getStore<Record<string, RecipeIngredient[]>>('guest_recipe_ingredients', {});
     const origIngs = allIngredients[id] || [];
 
     const newId = nextId();
-    const newRecipe: Recipe = {
+    const newRecipe: StoredRecipe = {
       ...original,
       id: newId,
       name: original.name + ' (Copy)',
