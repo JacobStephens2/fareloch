@@ -571,14 +571,14 @@ function showRecipeAddModal(recipe: Recipe, mealType: MealType, date: string) {
   const modal = document.getElementById('food-detail-modal')!;
   document.getElementById('modal-food-name')!.textContent = recipe.name;
 
-  const ps = recipe.perServing;
+  const perServing = recipe.perServing;
   const body = document.getElementById('modal-body')!;
   body.innerHTML = `
     <div class="modal-macros">
-      <div class="modal-macro"><strong>${ps.calories}</strong> kcal</div>
-      <div class="modal-macro"><strong>${ps.carbsG}g</strong> carbs</div>
-      <div class="modal-macro"><strong>${ps.proteinG}g</strong> protein</div>
-      <div class="modal-macro"><strong>${ps.fatG}g</strong> fat</div>
+      <div class="modal-macro"><strong>${perServing.calories}</strong> kcal</div>
+      <div class="modal-macro"><strong>${perServing.carbsG}g</strong> carbs</div>
+      <div class="modal-macro"><strong>${perServing.proteinG}g</strong> protein</div>
+      <div class="modal-macro"><strong>${perServing.fatG}g</strong> fat</div>
     </div>
     <p class="text-muted">Per ${recipe.serving_unit || 'serving'} (${recipe.total_servings} total)</p>
     <div class="form-group">
@@ -590,10 +590,10 @@ function showRecipeAddModal(recipe: Recipe, mealType: MealType, date: string) {
       </div>
     </div>
     <div class="modal-total" id="modal-total">
-      <span>${ps.calories} kcal</span>
-      <span>${ps.carbsG}g C</span>
-      <span>${ps.proteinG}g P</span>
-      <span>${ps.fatG}g F</span>
+      <span>${perServing.calories} kcal</span>
+      <span>${perServing.carbsG}g C</span>
+      <span>${perServing.proteinG}g P</span>
+      <span>${perServing.fatG}g F</span>
     </div>
     <button id="add-food-btn" class="btn btn-primary btn-block">Add to ${capitalize(mealType)}</button>
   `;
@@ -602,7 +602,7 @@ function showRecipeAddModal(recipe: Recipe, mealType: MealType, date: string) {
   const updateTotal = () => {
     const s = parseFloat(servingsInput.value) || 1;
     // Multiplies the display-rounded perServing the API sends (see #2)
-    const total = roundMacros(scaleMacros(ps, s), 'display');
+    const total = roundMacros(scaleMacros(perServing, s), 'display');
     document.getElementById('modal-total')!.innerHTML = `
       <span>${total.calories} kcal</span>
       <span>${total.carbsG}g C</span>
