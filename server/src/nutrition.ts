@@ -57,29 +57,31 @@ export function scaleMacros(m: Macros, factor: number): Macros {
 // A falsy total_servings counts as 1. Unrounded.
 export function recipePerServing(recipe: RecipeRow, ingredients: IngredientRow[]): Macros {
   const totalServings = recipe.total_servings || 1;
-
-  if (recipe.manual_calories != null) {
-    return {
-      calories: recipe.manual_calories / totalServings,
-      carbsG: (recipe.manual_carbs_g ?? 0) / totalServings,
-      proteinG: (recipe.manual_protein_g ?? 0) / totalServings,
-      fatG: (recipe.manual_fat_g ?? 0) / totalServings,
-    };
-  }
-
-  const total: Macros = { calories: 0, carbsG: 0, proteinG: 0, fatG: 0 };
-  for (const ing of ingredients) {
-    const m = scaleMacros(macrosOf(ing.food), ing.servings);
-    total.calories += m.calories;
-    total.carbsG += m.carbsG;
-    total.proteinG += m.proteinG;
-    total.fatG += m.fatG;
-  }
+  const total = recipe.manual_calories != null
+    ? {
+        calories: recipe.manual_calories,
+        carbsG: recipe.manual_carbs_g ?? 0,
+        proteinG: recipe.manual_protein_g ?? 0,
+        fatG: recipe.manual_fat_g ?? 0,
+      }
+    : ingredients.reduce(
+        (sum, ing) => addMacros(sum, scaleMacros(macrosOf(ing.food), ing.servings)),
+        { calories: 0, carbsG: 0, proteinG: 0, fatG: 0 },
+      );
   return {
     calories: total.calories / totalServings,
     carbsG: total.carbsG / totalServings,
     proteinG: total.proteinG / totalServings,
     fatG: total.fatG / totalServings,
+  };
+}
+
+function addMacros(a: Macros, b: Macros): Macros {
+  return {
+    calories: a.calories + b.calories,
+    carbsG: a.carbsG + b.carbsG,
+    proteinG: a.proteinG + b.proteinG,
+    fatG: a.fatG + b.fatG,
   };
 }
 

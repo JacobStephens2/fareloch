@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { getDb } from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
 import { Macros, macrosOf, scaleMacros, recipePerServing, roundMacros } from '../nutrition.js';
+import { recipeIngredientRows } from '../recipe-ingredients.js';
 
 const router = Router();
 
@@ -74,13 +75,7 @@ router.post('/', requireAuth, (req: Request, res: Response) => {
     if (recipeId) {
       const recipe = db.prepare('SELECT * FROM recipes WHERE id = ? AND user_id = ?').get(recipeId, req.user!.userId) as any;
       if (recipe) {
-        const ingredients = recipe.manual_calories != null ? [] : db.prepare(`
-          SELECT ri.servings, f.calories, f.carbs_g, f.protein_g, f.fat_g
-          FROM recipe_ingredients ri
-          JOIN foods f ON ri.food_id = f.id
-          WHERE ri.recipe_id = ?
-        `).all(recipeId) as any[];
-        const perServing = recipePerServing(recipe, ingredients.map((ing) => ({ food: ing, servings: ing.servings })));
+        const perServing = recipePerServing(recipe, recipeIngredientRows(db, recipe));
         finalMacros = scaleMacros(perServing, finalServings);
       }
     }

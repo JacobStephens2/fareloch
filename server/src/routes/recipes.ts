@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { getDb } from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
 import { recipePerServing, roundMacros } from '../nutrition.js';
+import { recipeIngredientRows } from '../recipe-ingredients.js';
 
 const router = Router();
 
@@ -10,20 +11,15 @@ router.get('/', requireAuth, (req: Request, res: Response) => {
   const db = getDb();
   const recipes = db.prepare('SELECT * FROM recipes WHERE user_id = ? ORDER BY name').all(req.user!.userId) as any[];
 
-  // Attach computed nutrition for each recipe. Manual-macro recipes report no ingredients.
+  // Attach computed nutrition for each recipe
   const withNutrition = recipes.map((r) => {
-    const ingredients = r.manual_calories != null ? [] : db.prepare(`
-      SELECT ri.servings, f.calories, f.carbs_g, f.protein_g, f.fat_g
-      FROM recipe_ingredients ri
-      JOIN foods f ON ri.food_id = f.id
-      WHERE ri.recipe_id = ?
-    `).all(r.id) as any[];
+    const ingredients = recipeIngredientRows(db, r);
 
     return {
       ...r,
       ingredientCount: ingredients.length,
       perServing: roundMacros(
-        recipePerServing(r, ingredients.map((ing) => ({ food: ing, servings: ing.servings }))),
+        recipePerServing(r, ingredients),
         'display',
       ),
     };
