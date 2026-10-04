@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { getDb } from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
+import { Macros, macrosOf, scaleMacros, recipePerServing, roundMacros } from '../nutrition.js';
 
 const router = Router();
 
@@ -58,20 +59,14 @@ router.post('/', requireAuth, (req: Request, res: Response) => {
       return;
     }
 
-    let finalCalories = calories || 0;
-    let finalCarbs = carbsG || 0;
-    let finalProtein = proteinG || 0;
-    let finalFat = fatG || 0;
     const finalServings = servings || 1;
+    let finalMacros: Macros = { calories: calories || 0, carbsG: carbsG || 0, proteinG: proteinG || 0, fatG: fatG || 0 };
 
     // Calculate from food
     if (foodId) {
       const food = db.prepare('SELECT * FROM foods WHERE id = ?').get(foodId) as any;
       if (food) {
-        finalCalories = food.calories * finalServings;
-        finalCarbs = food.carbs_g * finalServings;
-        finalProtein = food.protein_g * finalServings;
-        finalFat = food.fat_g * finalServings;
+        finalMacros = scaleMacros(macrosOf(food), finalServings);
       }
     }
 
@@ -79,47 +74,27 @@ router.post('/', requireAuth, (req: Request, res: Response) => {
     if (recipeId) {
       const recipe = db.prepare('SELECT * FROM recipes WHERE id = ? AND user_id = ?').get(recipeId, req.user!.userId) as any;
       if (recipe) {
-        const perServing = recipe.total_servings || 1;
-
-        if (recipe.manual_calories != null) {
-          // Use manual macros
-          finalCalories = (recipe.manual_calories / perServing) * finalServings;
-          finalCarbs = ((recipe.manual_carbs_g || 0) / perServing) * finalServings;
-          finalProtein = ((recipe.manual_protein_g || 0) / perServing) * finalServings;
-          finalFat = ((recipe.manual_fat_g || 0) / perServing) * finalServings;
-        } else {
-          // Calculate from ingredients
-          const ingredients = db.prepare(`
-            SELECT ri.servings, f.calories, f.carbs_g, f.protein_g, f.fat_g
-            FROM recipe_ingredients ri
-            JOIN foods f ON ri.food_id = f.id
-            WHERE ri.recipe_id = ?
-          `).all(recipeId) as any[];
-
-          let totalCal = 0, totalCarbs = 0, totalProtein = 0, totalFat = 0;
-          for (const ing of ingredients) {
-            totalCal += ing.calories * ing.servings;
-            totalCarbs += ing.carbs_g * ing.servings;
-            totalProtein += ing.protein_g * ing.servings;
-            totalFat += ing.fat_g * ing.servings;
-          }
-          finalCalories = (totalCal / perServing) * finalServings;
-          finalCarbs = (totalCarbs / perServing) * finalServings;
-          finalProtein = (totalProtein / perServing) * finalServings;
-          finalFat = (totalFat / perServing) * finalServings;
-        }
+        const ingredients = recipe.manual_calories != null ? [] : db.prepare(`
+          SELECT ri.servings, f.calories, f.carbs_g, f.protein_g, f.fat_g
+          FROM recipe_ingredients ri
+          JOIN foods f ON ri.food_id = f.id
+          WHERE ri.recipe_id = ?
+        `).all(recipeId) as any[];
+        const perServing = recipePerServing(recipe, ingredients.map((ing) => ({ food: ing, servings: ing.servings })));
+        finalMacros = scaleMacros(perServing, finalServings);
       }
     }
 
+    const stored = roundMacros(finalMacros, 'stored');
     const result = db.prepare(`
       INSERT INTO meal_logs (user_id, date, meal_type, food_id, recipe_id, servings, calories, carbs_g, protein_g, fat_g, note, unit_label, unit_scale)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(req.user!.userId, date, mealType, foodId || null, recipeId || null,
            finalServings,
-           Math.round(finalCalories * 10) / 10,
-           Math.round(finalCarbs * 10) / 10,
-           Math.round(finalProtein * 10) / 10,
-           Math.round(finalFat * 10) / 10,
+           stored.calories,
+           stored.carbsG,
+           stored.proteinG,
+           stored.fatG,
            note || null,
            unitLabel || null,
            unitScale || null);
