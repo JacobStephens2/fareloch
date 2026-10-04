@@ -530,17 +530,17 @@ function updateTotals(
   const totalsEl = document.getElementById('recipe-totals');
   if (!totalsEl) return;
 
-  const manualValue = (id: string) => parseFloat((document.getElementById(id) as HTMLInputElement)?.value) || 0;
+  // Same coalescing as the save handler, so blank manual calories fall back to the ingredients
+  const manualValue = (id: string) =>
+    mode === 'manual' ? (parseFloat((document.getElementById(id) as HTMLInputElement)?.value) || null) : null;
   const perServing = roundMacros(recipePerServing(
-    mode === 'manual'
-      ? {
-          total_servings: servings,
-          manual_calories: manualValue('manual-cal'),
-          manual_carbs_g: manualValue('manual-carbs'),
-          manual_protein_g: manualValue('manual-protein'),
-          manual_fat_g: manualValue('manual-fat'),
-        }
-      : { total_servings: servings, manual_calories: null, manual_carbs_g: null, manual_protein_g: null, manual_fat_g: null },
+    {
+      total_servings: servings,
+      manual_calories: manualValue('manual-cal'),
+      manual_carbs_g: manualValue('manual-carbs'),
+      manual_protein_g: manualValue('manual-protein'),
+      manual_fat_g: manualValue('manual-fat'),
+    },
     ingredients.map((ing) => ({ food: ing.food, servings: ing.servings })),
   ), 'display');
 
@@ -566,7 +566,7 @@ function renderIngredients(
   container.innerHTML = '';
   ingredients.forEach((ing, idx) => {
     const f = ing.food;
-    const m = scaleMacros(macrosOf(f), ing.servings);
+    const macros = scaleMacros(macrosOf(f), ing.servings);
     const servingSize = ('serving_size' in f ? f.serving_size : 0) || 0;
     const servingUnit = ('serving_unit' in f ? f.serving_unit : '') || '';
     let unit = ing.unitLabel;
@@ -579,7 +579,6 @@ function renderIngredients(
       }
     }
 
-
     const el = document.createElement('div');
     el.className = 'ingredient-row';
     el.innerHTML = `
@@ -588,10 +587,10 @@ function renderIngredients(
         <span class="ingredient-unit">${unit}</span>
       </div>
       <div class="ingredient-macros">
-        <span class="macro-chip chip-calories">${Math.round(m.calories)}</span>
-        <span class="macro-chip chip-carbs">${Math.round(m.carbsG)}c</span>
-        <span class="macro-chip chip-protein">${Math.round(m.proteinG)}p</span>
-        <span class="macro-chip chip-fat">${Math.round(m.fatG)}f</span>
+        <span class="macro-chip chip-calories">${Math.round(macros.calories)}</span>
+        <span class="macro-chip chip-carbs">${Math.round(macros.carbsG)}c</span>
+        <span class="macro-chip chip-protein">${Math.round(macros.proteinG)}p</span>
+        <span class="macro-chip chip-fat">${Math.round(macros.fatG)}f</span>
       </div>
       <button type="button" class="btn-icon btn-remove-ing" data-idx="${idx}">&times;</button>
     `;
