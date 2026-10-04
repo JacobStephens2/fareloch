@@ -1,6 +1,7 @@
 import { recipes as recipesApi, foods as foodsApi } from '../api';
 import { navigate } from '../router';
 import type { Food, FoodMeasure, RecipeIngredient } from '../types';
+import { macrosOf, scaleMacros, recipePerServing, roundMacros, unitScale, caloriesFromMacros } from '../../server/src/nutrition';
 
 export function recipesView() {
   return {
@@ -163,18 +164,16 @@ export function recipeEditView(params: Record<string, string>) {
         try { measures = food.measures ? JSON.parse(food.measures) : []; } catch { /* */ }
         const hasMeasures = measures.length > 0;
 
-        const baseCal = food.calories;
-        const baseC = food.carbs_g;
-        const baseP = food.protein_g;
-        const baseF = food.fat_g;
+        const base = macrosOf(food);
+        const baseDisplay = roundMacros(base, 'display');
 
         body.innerHTML = `
           ${food.brand ? `<p class="food-brand">${food.brand}</p>` : ''}
           <div class="modal-macros" id="ing-modal-per-unit">
-            <div class="modal-macro"><strong>${baseCal}</strong> kcal</div>
-            <div class="modal-macro"><strong>${baseC}g</strong> carbs</div>
-            <div class="modal-macro"><strong>${baseP}g</strong> protein</div>
-            <div class="modal-macro"><strong>${baseF}g</strong> fat</div>
+            <div class="modal-macro"><strong>${baseDisplay.calories}</strong> kcal</div>
+            <div class="modal-macro"><strong>${baseDisplay.carbsG}g</strong> carbs</div>
+            <div class="modal-macro"><strong>${baseDisplay.proteinG}g</strong> protein</div>
+            <div class="modal-macro"><strong>${baseDisplay.fatG}g</strong> fat</div>
           </div>
           <p class="text-muted" id="ing-modal-per-label">Per ${food.serving_size}${food.serving_unit}</p>
           ${hasMeasures ? `<div class="form-group">
@@ -199,42 +198,44 @@ export function recipeEditView(params: Record<string, string>) {
           </div>
         `;
 
-        let unitScale = 1;
+        let scale = 1;
         // When editing, recover the unit scale from stored servings and qty
         if (isEdit) {
           const editQty = ingredients[editIndex!].qty ?? ingredients[editIndex!].servings;
-          unitScale = ingredients[editIndex!].servings / editQty;
+          scale = ingredients[editIndex!].servings / editQty;
         }
         const qtyInput = document.getElementById('ing-qty') as HTMLInputElement;
         const unitSelect = document.getElementById('ing-unit-select') as HTMLSelectElement | null;
 
         const updateTotal = () => {
           const qty = parseFloat(qtyInput.value) || 1;
+          const total = roundMacros(scaleMacros(base, qty * scale), 'display');
           document.getElementById('ing-modal-total')!.innerHTML = `
-            <span>${Math.round(baseCal * unitScale * qty)} kcal</span>
-            <span>${Math.round(baseC * unitScale * qty * 10) / 10}g C</span>
-            <span>${Math.round(baseP * unitScale * qty * 10) / 10}g P</span>
-            <span>${Math.round(baseF * unitScale * qty * 10) / 10}g F</span>
+            <span>${total.calories} kcal</span>
+            <span>${total.carbsG}g C</span>
+            <span>${total.proteinG}g P</span>
+            <span>${total.fatG}g F</span>
           `;
         };
 
         const updatePerUnit = () => {
+          const perUnit = roundMacros(scaleMacros(base, scale), 'display');
           document.getElementById('ing-modal-per-unit')!.innerHTML = `
-            <div class="modal-macro"><strong>${Math.round(baseCal * unitScale)}</strong> kcal</div>
-            <div class="modal-macro"><strong>${Math.round(baseC * unitScale * 10) / 10}g</strong> carbs</div>
-            <div class="modal-macro"><strong>${Math.round(baseP * unitScale * 10) / 10}g</strong> protein</div>
-            <div class="modal-macro"><strong>${Math.round(baseF * unitScale * 10) / 10}g</strong> fat</div>
+            <div class="modal-macro"><strong>${perUnit.calories}</strong> kcal</div>
+            <div class="modal-macro"><strong>${perUnit.carbsG}g</strong> carbs</div>
+            <div class="modal-macro"><strong>${perUnit.proteinG}g</strong> protein</div>
+            <div class="modal-macro"><strong>${perUnit.fatG}g</strong> fat</div>
           `;
         };
 
         if (unitSelect) {
           unitSelect.addEventListener('change', () => {
             if (unitSelect.value === 'default') {
-              unitScale = 1;
+              scale = 1;
               document.getElementById('ing-modal-per-label')!.textContent = `Per ${food.serving_size}${food.serving_unit}`;
             } else {
               const m = measures[parseInt(unitSelect.value)];
-              unitScale = m.gramWeight / food.serving_size;
+              scale = unitScale(m.gramWeight, food.serving_size);
               document.getElementById('ing-modal-per-label')!.textContent = `Per ${m.label} (${m.gramWeight}g)`;
             }
             updatePerUnit();
@@ -257,7 +258,7 @@ export function recipeEditView(params: Record<string, string>) {
 
         document.getElementById('ing-add-btn')!.addEventListener('click', () => {
           const qty = parseFloat(qtyInput.value) || 1;
-          const effectiveServings = qty * unitScale;
+          const effectiveServings = qty * scale;
           const selectedUnit = unitSelect?.value;
           let unitLabel: string | undefined;
           if (selectedUnit && selectedUnit !== 'default') {
@@ -315,7 +316,7 @@ export function recipeEditView(params: Record<string, string>) {
         const c = parseFloat((document.getElementById('manual-carbs') as HTMLInputElement).value) || 0;
         const p = parseFloat((document.getElementById('manual-protein') as HTMLInputElement).value) || 0;
         const f = parseFloat((document.getElementById('manual-fat') as HTMLInputElement).value) || 0;
-        manualCalInput.value = String(Math.round(c * 4 + p * 4 + f * 9));
+        manualCalInput.value = String(caloriesFromMacros(c, p, f));
         updateTotals(ingredients, mode);
       };
       ['manual-carbs', 'manual-protein', 'manual-fat'].forEach(id =>
@@ -529,31 +530,28 @@ function updateTotals(
   const totalsEl = document.getElementById('recipe-totals');
   if (!totalsEl) return;
 
-  let totalCal = 0, totalC = 0, totalP = 0, totalF = 0;
-
-  if (mode === 'manual') {
-    totalCal = parseFloat((document.getElementById('manual-cal') as HTMLInputElement)?.value) || 0;
-    totalC = parseFloat((document.getElementById('manual-carbs') as HTMLInputElement)?.value) || 0;
-    totalP = parseFloat((document.getElementById('manual-protein') as HTMLInputElement)?.value) || 0;
-    totalF = parseFloat((document.getElementById('manual-fat') as HTMLInputElement)?.value) || 0;
-  } else {
-    for (const ing of ingredients) {
-      const f = ing.food;
-      totalCal += (f.calories || 0) * ing.servings;
-      totalC += (f.carbs_g || 0) * ing.servings;
-      totalP += (f.protein_g || 0) * ing.servings;
-      totalF += (f.fat_g || 0) * ing.servings;
-    }
-  }
+  // Same coalescing as the save handler, so blank manual calories fall back to the ingredients
+  const manualValue = (id: string) =>
+    mode === 'manual' ? (parseFloat((document.getElementById(id) as HTMLInputElement)?.value) || null) : null;
+  const perServing = roundMacros(recipePerServing(
+    {
+      total_servings: servings,
+      manual_calories: manualValue('manual-cal'),
+      manual_carbs_g: manualValue('manual-carbs'),
+      manual_protein_g: manualValue('manual-protein'),
+      manual_fat_g: manualValue('manual-fat'),
+    },
+    ingredients.map((ing) => ({ food: ing.food, servings: ing.servings })),
+  ), 'display');
 
   const unitLabel = unit + (servings !== 1 ? 's' : '');
   totalsEl.innerHTML = `
     <h4>Per ${unit} (of ${servings} ${unitLabel})</h4>
     <div class="modal-macros">
-      <div class="modal-macro"><strong>${Math.round(totalCal / servings)}</strong> kcal</div>
-      <div class="modal-macro"><strong>${Math.round(totalC / servings * 10) / 10}g</strong> carbs</div>
-      <div class="modal-macro"><strong>${Math.round(totalP / servings * 10) / 10}g</strong> protein</div>
-      <div class="modal-macro"><strong>${Math.round(totalF / servings * 10) / 10}g</strong> fat</div>
+      <div class="modal-macro"><strong>${perServing.calories}</strong> kcal</div>
+      <div class="modal-macro"><strong>${perServing.carbsG}g</strong> carbs</div>
+      <div class="modal-macro"><strong>${perServing.proteinG}g</strong> protein</div>
+      <div class="modal-macro"><strong>${perServing.fatG}g</strong> fat</div>
     </div>
   `;
 }
@@ -568,7 +566,7 @@ function renderIngredients(
   container.innerHTML = '';
   ingredients.forEach((ing, idx) => {
     const f = ing.food;
-    const cal = (f.calories || 0) * ing.servings;
+    const macros = scaleMacros(macrosOf(f), ing.servings);
     const servingSize = ('serving_size' in f ? f.serving_size : 0) || 0;
     const servingUnit = ('serving_unit' in f ? f.serving_unit : '') || '';
     let unit = ing.unitLabel;
@@ -581,10 +579,6 @@ function renderIngredients(
       }
     }
 
-    const c = (f.carbs_g || 0) * ing.servings;
-    const p = (f.protein_g || 0) * ing.servings;
-    const fat = (f.fat_g || 0) * ing.servings;
-
     const el = document.createElement('div');
     el.className = 'ingredient-row';
     el.innerHTML = `
@@ -593,10 +587,10 @@ function renderIngredients(
         <span class="ingredient-unit">${unit}</span>
       </div>
       <div class="ingredient-macros">
-        <span class="macro-chip chip-calories">${Math.round(cal)}</span>
-        <span class="macro-chip chip-carbs">${Math.round(c)}c</span>
-        <span class="macro-chip chip-protein">${Math.round(p)}p</span>
-        <span class="macro-chip chip-fat">${Math.round(fat)}f</span>
+        <span class="macro-chip chip-calories">${Math.round(macros.calories)}</span>
+        <span class="macro-chip chip-carbs">${Math.round(macros.carbsG)}c</span>
+        <span class="macro-chip chip-protein">${Math.round(macros.proteinG)}p</span>
+        <span class="macro-chip chip-fat">${Math.round(macros.fatG)}f</span>
       </div>
       <button type="button" class="btn-icon btn-remove-ing" data-idx="${idx}">&times;</button>
     `;
