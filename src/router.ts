@@ -50,15 +50,13 @@ export function startRouter() {
     const path = hash.slice(1).split('?')[0]; // Remove # and query params
     const queryParams = getQueryParams();
     const app = document.getElementById('app')!;
+    const cleanup = currentCleanup;
+    currentCleanup = null;
+    cleanup?.();
 
     for (const r of routes) {
       const match = path.match(r.pattern);
       if (match) {
-        if (currentCleanup) {
-          currentCleanup();
-          currentCleanup = null;
-        }
-
         const result = r.handler({ ...queryParams, _match: match as any });
         app.innerHTML = result.html;
         result.init();
