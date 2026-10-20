@@ -1,6 +1,7 @@
 import { foods as foodsApi, meals as mealsApi, recipes as recipesApi } from '../api';
 import { navigate, getQueryParams, setCleanup } from '../router';
 import { toLocalDateStr } from '../state';
+import { createFoodSearchSession, type FoodSearchResult } from '../food-search-session';
 import type { Food, ExternalFood, FoodMeasure, Recipe, MealType } from '../types';
 
 export function logFoodView() {
@@ -63,10 +64,40 @@ export function logFoodView() {
       </div>
     `,
     init: () => {
-      let searchTimeout: ReturnType<typeof setTimeout>;
       let scannerInstance: any = null;
       const searchInput = document.getElementById('food-search') as HTMLInputElement;
+      const content = document.getElementById('tab-content')!;
       let activeTab = 'search';
+      let disposed = false;
+      let tabRevision = 0;
+      const session = createFoodSearchSession({
+        search: query => foodsApi.search(query),
+        loadDefault: async () => ({ foods: (await foodsApi.recent()).foods, external: [] }),
+        onChange: snapshot => {
+          searchInput.classList.toggle('searching', snapshot.status === 'debouncing' ||
+            (snapshot.status === 'loading' && snapshot.source === 'search'));
+          if (snapshot.status === 'inactive') return;
+          content.innerHTML = '';
+          if (snapshot.status === 'ready') {
+            if (snapshot.source === 'default') {
+              if (snapshot.result.foods.length) {
+                content.innerHTML = '<h4 class="section-label">Recent</h4>';
+                renderFoodList(content, snapshot.result.foods, mealType, date);
+              } else {
+                content.innerHTML = '<p class="text-muted">Type to search for foods</p>';
+              }
+            } else {
+              renderSearchResults(content, snapshot.result, mealType, date);
+            }
+          } else if (snapshot.status === 'error') {
+            content.innerHTML = snapshot.source === 'default'
+              ? '<p class="text-muted">Type to search for foods</p>'
+              : '<p class="form-error">Search failed</p>';
+          } else if (snapshot.status === 'loading' || snapshot.status === 'debouncing') {
+            content.innerHTML = `<div class="loading-spinner">${snapshot.source === 'search' ? 'Searching...' : 'Loading...'}</div>`;
+          }
+        },
+      });
 
       // Back button
       document.getElementById('back-btn')!.addEventListener('click', () => navigate('#/'));
@@ -77,26 +108,22 @@ export function logFoodView() {
           document.querySelector('.tab.active')?.classList.remove('active');
           tab.classList.add('active');
           activeTab = (tab as HTMLElement).dataset.tab || 'search';
-          loadTab(activeTab, mealType, date);
+          const current = ++tabRevision;
+          session.setActive(activeTab === 'search');
+          if (activeTab !== 'search') {
+            void loadTab(content, activeTab, mealType, date, () => !disposed && current === tabRevision);
+          }
         });
       });
 
       // Search input
       searchInput.addEventListener('input', () => {
-        clearTimeout(searchTimeout);
-        if (searchInput.value.trim().length >= 2) {
-          searchInput.classList.add('searching');
-        } else {
-          searchInput.classList.remove('searching');
-        }
-        searchTimeout = setTimeout(async () => {
-          if (searchInput.value.trim().length >= 2) {
-            await searchFoods(searchInput.value.trim(), mealType, date);
-          } else if (activeTab === 'search') {
-            loadTab('search', mealType, date);
-          }
-          searchInput.classList.remove('searching');
-        }, 400);
+        ++tabRevision;
+        activeTab = 'search';
+        document.querySelector('.tab.active')?.classList.remove('active');
+        document.querySelector('[data-tab="search"]')!.classList.add('active');
+        session.setQuery(searchInput.value);
+        session.setActive(true);
       });
 
       // Barcode scanner
@@ -192,13 +219,16 @@ export function logFoodView() {
 
       // Cleanup
       setCleanup(() => {
+        disposed = true;
+        ++tabRevision;
+        session.dispose();
         if (scannerInstance) {
           scannerInstance.stop().catch(() => {});
         }
       });
 
       // Initial load
-      loadTab('search', mealType, date);
+      session.setActive(true);
     },
   };
 }
@@ -207,35 +237,19 @@ function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-async function loadTab(tab: string, mealType: MealType, date: string) {
-  const content = document.getElementById('tab-content')!;
-
-  if (tab === 'search') {
-    content.innerHTML = '<div class="loading-spinner">Loading...</div>';
-    try {
-      const { foods } = await foodsApi.recent();
-      if (foods.length === 0) {
-        content.innerHTML = '<p class="text-muted">Type to search for foods</p>';
-        return;
-      }
-      content.innerHTML = '<h4 class="section-label">Recent</h4>';
-      renderFoodList(content, foods, mealType, date);
-    } catch {
-      content.innerHTML = '<p class="text-muted">Type to search for foods</p>';
-    }
-    return;
-  }
-
+async function loadTab(content: HTMLElement, tab: string, mealType: MealType, date: string, isCurrent: () => boolean) {
   if (tab === 'recent') {
     content.innerHTML = '<div class="loading-spinner">Loading...</div>';
     try {
       const { foods } = await foodsApi.recent();
+      if (!isCurrent()) return;
       if (foods.length === 0) {
         content.innerHTML = '<p class="text-muted">No recent foods</p>';
         return;
       }
       renderFoodList(content, foods, mealType, date);
     } catch {
+      if (!isCurrent()) return;
       content.innerHTML = '<p class="form-error">Failed to load recent foods</p>';
     }
     return;
@@ -245,14 +259,18 @@ async function loadTab(tab: string, mealType: MealType, date: string) {
     content.innerHTML = '<div class="loading-spinner">Loading...</div>';
     try {
       const { foods } = await foodsApi.custom();
+      if (!isCurrent()) return;
       let html = '<button id="create-food-btn" class="btn btn-outline btn-block" style="margin-bottom:12px">+ Create Custom Food</button>';
       if (foods.length === 0) {
         html += '<p class="text-muted">No custom foods yet</p>';
       }
       content.innerHTML = html;
       if (foods.length > 0) renderFoodList(content, foods, mealType, date, true);
-      document.getElementById('create-food-btn')!.addEventListener('click', () => showCreateFoodForm(mealType, date));
+      document.getElementById('create-food-btn')!.addEventListener('click', () => showCreateFoodForm(mealType, date, () => {
+        if (isCurrent()) void loadTab(content, tab, mealType, date, isCurrent);
+      }));
     } catch {
+      if (!isCurrent()) return;
       content.innerHTML = '<p class="form-error">Failed to load foods</p>';
     }
     return;
@@ -262,6 +280,7 @@ async function loadTab(tab: string, mealType: MealType, date: string) {
     content.innerHTML = '<div class="loading-spinner">Loading...</div>';
     try {
       const { recipes } = await recipesApi.list();
+      if (!isCurrent()) return;
       if (recipes.length === 0) {
         content.innerHTML = '<p class="text-muted">No recipes yet. <a href="#/recipes">Create one</a></p>';
         return;
@@ -269,6 +288,7 @@ async function loadTab(tab: string, mealType: MealType, date: string) {
       content.innerHTML = '';
       renderRecipeList(content, recipes, mealType, date);
     } catch {
+      if (!isCurrent()) return;
       content.innerHTML = '<p class="form-error">Failed to load recipes</p>';
     }
     return;
@@ -280,40 +300,32 @@ async function loadTab(tab: string, mealType: MealType, date: string) {
   }
 }
 
-async function searchFoods(query: string, mealType: MealType, date: string) {
-  const content = document.getElementById('tab-content')!;
-  content.innerHTML = '<div class="loading-spinner">Searching...</div>';
+function renderSearchResults(content: HTMLElement, { foods, external }: FoodSearchResult, mealType: MealType, date: string) {
+  let html = '';
 
-  try {
-    const { foods, external } = await foodsApi.search(query);
-    let html = '';
+  if (foods.length > 0) {
+    html += '<h4 class="section-label">Saved Foods</h4>';
+  }
+  content.innerHTML = html;
+  if (foods.length > 0) renderFoodList(content, foods, mealType, date);
 
-    if (foods.length > 0) {
-      html += '<h4 class="section-label">Saved Foods</h4>';
+  if (external.length > 0) {
+    const extHeader = document.createElement('h4');
+    extHeader.className = 'section-label';
+    extHeader.textContent = 'External Results';
+    content.appendChild(extHeader);
+    renderExternalList(content, external, mealType, date);
+
+    if (external.some(f => f.source === 'fatsecret')) {
+      const attr = document.createElement('div');
+      attr.className = 'api-attribution';
+      attr.innerHTML = '<a href="https://platform.fatsecret.com" target="_blank" rel="noopener">Powered by FatSecret Platform API</a>';
+      content.appendChild(attr);
     }
-    content.innerHTML = html;
-    if (foods.length > 0) renderFoodList(content, foods, mealType, date);
+  }
 
-    if (external.length > 0) {
-      const extHeader = document.createElement('h4');
-      extHeader.className = 'section-label';
-      extHeader.textContent = 'External Results';
-      content.appendChild(extHeader);
-      renderExternalList(content, external, mealType, date);
-
-      if (external.some(f => f.source === 'fatsecret')) {
-        const attr = document.createElement('div');
-        attr.className = 'api-attribution';
-        attr.innerHTML = '<a href="https://platform.fatsecret.com" target="_blank" rel="noopener">Powered by FatSecret Platform API</a>';
-        content.appendChild(attr);
-      }
-    }
-
-    if (foods.length === 0 && external.length === 0) {
-      content.innerHTML = '<p class="text-muted">No results found</p>';
-    }
-  } catch {
-    content.innerHTML = '<p class="form-error">Search failed</p>';
+  if (foods.length === 0 && external.length === 0) {
+    content.innerHTML = '<p class="text-muted">No results found</p>';
   }
 }
 
@@ -714,7 +726,7 @@ function showQuickAddForm(container: HTMLElement, mealType: MealType, date: stri
   });
 }
 
-function showCreateFoodForm(mealType: MealType, date: string) {
+function showCreateFoodForm(mealType: MealType, date: string, onCancel: () => void) {
   const content = document.getElementById('tab-content')!;
   content.innerHTML = `
     <form id="create-food-form">
@@ -774,9 +786,7 @@ function showCreateFoodForm(mealType: MealType, date: string) {
     document.getElementById(id)!.addEventListener('input', autoCalcCf)
   );
 
-  document.getElementById('cancel-create')!.addEventListener('click', () => {
-    loadTab('custom', mealType, date);
-  });
+  document.getElementById('cancel-create')!.addEventListener('click', onCancel);
 
   document.getElementById('create-food-form')!.addEventListener('submit', async (e) => {
     e.preventDefault();
