@@ -8,9 +8,21 @@ import type { FoodSearchResult } from '../food-search-session';
 import type { ExternalFood, Recipe } from '../types';
 
 vi.mock('../api', () => ({
-  foods: { search: vi.fn(), recent: vi.fn(), custom: vi.fn(), saveExternal: vi.fn() },
+  foods: { search: vi.fn(), recent: vi.fn(), custom: vi.fn(), saveExternal: vi.fn(), barcode: vi.fn() },
   recipes: { list: vi.fn(), get: vi.fn(), create: vi.fn() },
   meals: { log: vi.fn() },
+}));
+
+vi.mock('html5-qrcode', () => ({
+  Html5Qrcode: class {
+    start(_camera: unknown, _config: unknown, onScan: (code: string) => void) {
+      onScan('0012345678905');
+      return Promise.resolve();
+    }
+    stop() {
+      return Promise.resolve();
+    }
+  },
 }));
 
 function go(path: string) {
@@ -389,4 +401,15 @@ it('Log Food retains saved/external selection, source badges, attribution and me
   click('#add-food-btn');
   expect(meals.log).toHaveBeenCalledWith({ date: '2026-10-20', mealType: 'lunch', foodId: 1, servings: 2, unitLabel: 'cup', unitScale: 2 });
   await vi.advanceTimersByTimeAsync(0);
+});
+
+it('Log Food shows a scanned barcode found food name as text', async () => {
+  vi.mocked(foods.barcode).mockResolvedValue({ food: food('Found apple<img alt="found-name">') });
+  go('/log');
+  await vi.advanceTimersByTimeAsync(0);
+  click('#scan-btn');
+  await vi.advanceTimersByTimeAsync(0);
+  const content = document.querySelector('#tab-content')!;
+  expect(content.querySelector('img')).toBeNull();
+  expect(content.textContent).toContain('Found: Found apple<img alt="found-name">');
 });

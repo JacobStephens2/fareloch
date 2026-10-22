@@ -337,7 +337,10 @@ async function lookupBarcode(code: string, mealType: MealType, date: string) {
   try {
     const { food } = await foodsApi.barcode(code);
     showAddModal(food, mealType, date);
-    content.innerHTML = `<p class="text-muted">Found: ${food.name}</p>`;
+    const found = document.createElement('p');
+    found.className = 'text-muted';
+    found.append('Found: ', document.createTextNode(food.name));
+    content.replaceChildren(found);
   } catch {
     content.innerHTML = `<p class="form-error">No product found for barcode ${code}</p>`;
   }
