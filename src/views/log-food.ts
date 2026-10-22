@@ -7,7 +7,7 @@ import type { Food, ExternalFood, FoodMeasure, Recipe, MealType } from '../types
 
 export function logFoodView() {
   const params = getQueryParams();
-  const mealType = (params.meal || 'snack') as MealType;
+  const mealType = acceptedMealType(params.meal);
   const date = params.date || toLocalDateStr();
 
   return {
@@ -232,6 +232,11 @@ export function logFoodView() {
       session.setActive(true);
     },
   };
+}
+
+function acceptedMealType(value: string | undefined): MealType {
+  if (value === 'breakfast' || value === 'lunch' || value === 'dinner' || value === 'snack') return value;
+  return 'snack';
 }
 
 function capitalize(s: string): string {
