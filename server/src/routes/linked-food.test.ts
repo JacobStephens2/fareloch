@@ -296,3 +296,110 @@ it('counts per-serving nutrition only from a food the caller owns or that has no
   });
   expect(JSON.stringify(logged.data)).not.toContain('Secret millet');
 });
+
+it('does not link another caller food when logging a meal', async () => {
+  const ada = addUser('ada-store-meal@example.com', 'Ada');
+  const grace = addUser('grace-store-meal@example.com', 'Grace');
+  const adaToken = tokenFor(ada, 'ada-store-meal@example.com', 'Ada');
+  const secret = addFood(grace, 'Secret stew', 'Grace Pantry', 999);
+
+  const logged = await postJson('/api/meals', adaToken, {
+    date: '2026-10-27', mealType: 'snack', foodId: secret, servings: 1,
+  });
+
+  if (logged.status === 200) {
+    expect(logged.data.meal.food_id).not.toBe(secret);
+  } else {
+    expect(logged.status).toBe(400);
+  }
+  const stored = getDb().prepare(
+    'SELECT food_id FROM meal_logs WHERE user_id = ? AND date = ?'
+  ).all(ada, '2026-10-27') as { food_id: number | null }[];
+  expect(stored.map((row) => row.food_id)).not.toContain(secret);
+});
+
+it('does not link another caller food when saving a recipe', async () => {
+  const ada = addUser('ada-store-recipe@example.com', 'Ada');
+  const grace = addUser('grace-store-recipe@example.com', 'Grace');
+  const adaToken = tokenFor(ada, 'ada-store-recipe@example.com', 'Ada');
+  const own = addFood(ada, 'Ada flour', 'Ada Mill', 150);
+  const secret = addFood(grace, 'Secret flour', 'Grace Pantry', 999);
+
+  const created = await postJson('/api/recipes', adaToken, {
+    name: 'Ada bread',
+    totalServings: 2,
+    ingredients: [
+      { foodId: own, servings: 1 },
+      { foodId: secret, servings: 1 },
+    ],
+  });
+  expect(created.status).toBe(200);
+  const stored = getDb().prepare(
+    'SELECT food_id FROM recipe_ingredients WHERE recipe_id = ?'
+  ).all(created.data.recipe.id) as { food_id: number }[];
+  expect(stored.map((row) => row.food_id)).toContain(own);
+  expect(stored.map((row) => row.food_id)).not.toContain(secret);
+});
+
+it('does not keep another caller food when a recipe is updated or copied', async () => {
+  const ada = addUser('ada-recipe-copy@example.com', 'Ada');
+  const grace = addUser('grace-recipe-copy@example.com', 'Grace');
+  const adaToken = tokenFor(ada, 'ada-recipe-copy@example.com', 'Ada');
+  const own = addFood(ada, 'Ada rye', 'Ada Mill', 150);
+  const shared = addFood(null, 'Pantry rye', null, 40);
+  const secret = addFood(grace, 'Secret rye', 'Grace Pantry', 999);
+  const created = await postJson('/api/recipes', adaToken, {
+    name: 'Ada rye loaf',
+    totalServings: 1,
+    ingredients: [{ foodId: own, servings: 1 }],
+  });
+  expect(created.status).toBe(200);
+  const recipeId = created.data.recipe.id as number;
+
+  const updated = await putJson(`/api/recipes/${recipeId}`, adaToken, {
+    ingredients: [
+      { foodId: shared, servings: 1 },
+      { foodId: secret, servings: 1 },
+    ],
+  });
+  expect(updated.status).toBe(200);
+  const afterUpdate = getDb().prepare(
+    'SELECT food_id FROM recipe_ingredients WHERE recipe_id = ?'
+  ).all(recipeId) as { food_id: number }[];
+  expect(afterUpdate.map((row) => row.food_id)).toEqual([shared]);
+
+  getDb().prepare(
+    'INSERT INTO recipe_ingredients (recipe_id, food_id, servings) VALUES (?, ?, 1)'
+  ).run(recipeId, secret);
+  const copied = await postJson(`/api/recipes/${recipeId}/copy`, adaToken, {});
+  expect(copied.status).toBe(200);
+  const copiedIds = getDb().prepare(
+    'SELECT food_id FROM recipe_ingredients WHERE recipe_id = ?'
+  ).all(copied.data.recipe.id) as { food_id: number }[];
+  expect(copiedIds.map((row) => row.food_id)).toEqual([shared]);
+});
+
+it('does not copy a link to another caller food onto another day', async () => {
+  const ada = addUser('ada-meal-copy@example.com', 'Ada');
+  const grace = addUser('grace-meal-copy@example.com', 'Grace');
+  const adaToken = tokenFor(ada, 'ada-meal-copy@example.com', 'Ada');
+  const own = addFood(ada, 'Ada copy oats', 'Ada Mill', 150);
+  const shared = addFood(null, 'Pantry copy rice', null, 40);
+  const secret = addFood(grace, 'Secret copy granola', 'Grace Pantry', 999);
+  addMeal(ada, '2026-10-28', own, 'own copy');
+  addMeal(ada, '2026-10-28', shared, 'shared copy');
+  addMeal(ada, '2026-10-28', secret, 'their copy');
+
+  const copied = await postJson('/api/meals/copy', adaToken, {
+    fromDate: '2026-10-28', toDate: '2026-10-29',
+  });
+  expect(copied.status).toBe(200);
+  expect(copied.data.copied).toBe(3);
+  const stored = getDb().prepare(
+    'SELECT food_id, note FROM meal_logs WHERE user_id = ? AND date = ?'
+  ).all(ada, '2026-10-29') as { food_id: number | null; note: string }[];
+  const byNote = Object.fromEntries(stored.map((row) => [row.note, row.food_id]));
+  expect(byNote['own copy']).toBe(own);
+  expect(byNote['shared copy']).toBe(shared);
+  expect(byNote['their copy']).toBeNull();
+});
