@@ -2,7 +2,7 @@ import { foods as foodsApi, meals as mealsApi, recipes as recipesApi } from '../
 import { navigate, getQueryParams, setCleanup } from '../router';
 import { toLocalDateStr } from '../state';
 import { createFoodSearchSession, type FoodSearchResult } from '../food-search-session';
-import { assignFoodDetailText, macroChips, measureCountSuffix, savedMeasureSuffix, sourceLabel, textSpan } from './food-search-text';
+import { assignFoodDetailText, assignSavedMeasureOptions, macroChips, measureCountSuffix, savedMeasureSuffix, sourceLabel, textSpan } from './food-search-text';
 import type { Food, ExternalFood, FoodMeasure, Recipe, MealType } from '../types';
 
 export function logFoodView() {
@@ -471,7 +471,6 @@ function showAddModal(food: Food, mealType: MealType, date: string) {
         <label for="unit-select">Unit</label>
         <select id="unit-select">
           <option value="default"></option>
-          ${measures.map((m, i) => `<option value="${i}">${m.label} (${m.gramWeight}g)</option>`).join('')}
         </select>
       </div>`
     : '';
@@ -514,6 +513,7 @@ function showAddModal(food: Food, mealType: MealType, date: string) {
 
   const servingsInput = document.getElementById('servings-input') as HTMLInputElement;
   const unitSelect = document.getElementById('unit-select') as HTMLSelectElement | null;
+  if (unitSelect) assignSavedMeasureOptions(unitSelect, measures);
 
   const updateTotal = () => {
     const qty = parseFloat(servingsInput.value) || 1;
