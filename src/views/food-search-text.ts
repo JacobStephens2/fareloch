@@ -4,6 +4,17 @@ const SOURCE_LABELS: Record<string, string> = {
   openfoodfacts: 'OFF',
 };
 
+export function assignFoodDetailText(
+  root: ParentNode,
+  food: { brand: string | null; serving_size: number; serving_unit: string },
+  perLabel: Element,
+  defaultOption: Element | null,
+): void {
+  if (food.brand) root.querySelector('.food-brand')!.textContent = food.brand;
+  perLabel.textContent = `Per ${food.serving_size}${food.serving_unit}`;
+  if (defaultOption) defaultOption.textContent = `${food.serving_size}${food.serving_unit} (default)`;
+}
+
 export function textSpan(className: string, text: string): HTMLSpanElement {
   const span = document.createElement('span');
   span.className = className;

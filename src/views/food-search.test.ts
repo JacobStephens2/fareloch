@@ -495,6 +495,33 @@ it('Log Food shows an unmatched barcode as text', async () => {
   expect(content.textContent).toContain('No product found for barcode 0012345678905<img alt="unmatched-code">');
 });
 
+it('Log Food add modal and Recipe editor ingredient modal show brand, serving, and default unit as text', async () => {
+  const item = food('Apple');
+  item.brand = 'Acme<img alt="brand">';
+  item.serving_unit = 'g<img alt="unit">';
+  vi.mocked(foods.search).mockResolvedValue({ foods: [item], external: [] });
+
+  go('/log');
+  input('#food-search', 'apple');
+  await vi.advanceTimersByTimeAsync(400);
+  click('#tab-content .food-item');
+  const addModal = document.querySelector('#food-detail-modal')!;
+  expect(addModal.querySelector('img')).toBeNull();
+  expect(addModal.querySelector('.food-brand')!.textContent).toBe('Acme<img alt="brand">');
+  expect(addModal.querySelector('#modal-per-label')!.textContent).toBe('Per 100g<img alt="unit">');
+  expect(addModal.querySelector('#unit-select option[value="default"]')!.textContent).toBe('100g<img alt="unit"> (default)');
+
+  go('/recipe');
+  input('#ing-search', 'apple');
+  await vi.advanceTimersByTimeAsync(400);
+  click('#ing-results .food-item');
+  const ingredientModal = document.querySelector('#ing-modal')!;
+  expect(ingredientModal.querySelector('img')).toBeNull();
+  expect(ingredientModal.querySelector('.food-brand')!.textContent).toBe('Acme<img alt="brand">');
+  expect(ingredientModal.querySelector('#ing-modal-per-label')!.textContent).toBe('Per 100g<img alt="unit">');
+  expect(ingredientModal.querySelector('#ing-unit-select option[value="default"]')!.textContent).toBe('100g<img alt="unit"> (default)');
+});
+
 it('recipe ingredient list shows the name and unit as text', async () => {
   const name = 'Apple<img alt="ingredient-name">';
   const unit = 'cup<img alt="ingredient-unit">';
