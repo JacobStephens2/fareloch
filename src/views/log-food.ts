@@ -2,6 +2,7 @@ import { foods as foodsApi, meals as mealsApi, recipes as recipesApi } from '../
 import { navigate, getQueryParams, setCleanup } from '../router';
 import { toLocalDateStr } from '../state';
 import { createFoodSearchSession, type FoodSearchResult } from '../food-search-session';
+import { savedMeasureSuffix, sourceLabel, textSpan } from './food-search-text';
 import type { Food, ExternalFood, FoodMeasure, Recipe, MealType } from '../types';
 
 export function logFoodView() {
@@ -342,26 +343,35 @@ async function lookupBarcode(code: string, mealType: MealType, date: string) {
   }
 }
 
+function macroChips(calories: number, carbs: number, protein: number, fat: number): HTMLDivElement {
+  const macros = document.createElement('div');
+  macros.className = 'food-item-macros';
+  macros.append(
+    textSpan('macro-chip chip-calories', String(Math.round(calories))),
+    textSpan('macro-chip chip-carbs', `${Math.round(carbs)}c`),
+    textSpan('macro-chip chip-protein', `${Math.round(protein)}p`),
+    textSpan('macro-chip chip-fat', `${Math.round(fat)}f`),
+  );
+  return macros;
+}
+
 function renderFoodList(container: HTMLElement, foods: Food[], mealType: MealType, date: string, append = false) {
   const list = document.createElement('div');
   list.className = 'food-list';
 
   for (const food of foods) {
+    const info = document.createElement('div');
+    info.className = 'food-item-info';
+    const serving = textSpan('food-serving', `${food.serving_size}${food.serving_unit}${savedMeasureSuffix(food.measures)} · `);
+    serving.appendChild(sourceLabel(food.source));
+    info.append(
+      textSpan('food-item-name', food.name),
+      ...(food.brand ? [textSpan('food-brand', food.brand)] : []),
+      serving,
+    );
     const item = document.createElement('div');
     item.className = 'food-item';
-    item.innerHTML = `
-      <div class="food-item-info">
-        <span class="food-item-name">${food.name}</span>
-        ${food.brand ? `<span class="food-brand">${food.brand}</span>` : ''}
-        <span class="food-serving">${food.serving_size}${food.serving_unit}${(() => { try { const m = food.measures ? JSON.parse(food.measures) : []; return m.length ? ` · ${m.length + 1} units` : ''; } catch { return ''; } })()}</span>
-      </div>
-      <div class="food-item-macros">
-        <span class="macro-chip chip-calories">${Math.round(food.calories)}</span>
-        <span class="macro-chip chip-carbs">${Math.round(food.carbs_g)}c</span>
-        <span class="macro-chip chip-protein">${Math.round(food.protein_g)}p</span>
-        <span class="macro-chip chip-fat">${Math.round(food.fat_g)}f</span>
-      </div>
-    `;
+    item.append(info, macroChips(food.calories, food.carbs_g, food.protein_g, food.fat_g));
     item.addEventListener('click', () => showAddModal(food, mealType, date));
     list.appendChild(item);
   }
@@ -379,25 +389,18 @@ function renderExternalList(container: HTMLElement, items: ExternalFood[], mealT
   list.className = 'food-list';
 
   for (const item of items) {
+    const serving = textSpan('food-serving', `${item.servingSize}${item.servingUnit}${item.measures?.length ? ` · ${item.measures.length + 1} units` : ''} · `);
+    serving.appendChild(sourceLabel(item.source));
+    const info = document.createElement('div');
+    info.className = 'food-item-info';
+    info.append(
+      textSpan('food-item-name', item.name),
+      ...(item.brand ? [textSpan('food-brand', item.brand)] : []),
+      serving,
+    );
     const el = document.createElement('div');
     el.className = 'food-item';
-    const sourceLabel = item.source === 'fatsecret' ? 'FatSecret'
-      : item.source === 'usda' ? 'USDA'
-      : item.source === 'openfoodfacts' ? 'OFF'
-      : item.source;
-    el.innerHTML = `
-      <div class="food-item-info">
-        <span class="food-item-name">${item.name}</span>
-        ${item.brand ? `<span class="food-brand">${item.brand}</span>` : ''}
-        <span class="food-serving">${item.servingSize}${item.servingUnit}${item.measures?.length ? ` · ${item.measures.length + 1} units` : ''} · <span class="food-source source-${item.source}">${sourceLabel}</span></span>
-      </div>
-      <div class="food-item-macros">
-        <span class="macro-chip chip-calories">${Math.round(item.calories)}</span>
-        <span class="macro-chip chip-carbs">${Math.round(item.carbsG)}c</span>
-        <span class="macro-chip chip-protein">${Math.round(item.proteinG)}p</span>
-        <span class="macro-chip chip-fat">${Math.round(item.fatG)}f</span>
-      </div>
-    `;
+    el.append(info, macroChips(item.calories, item.carbsG, item.proteinG, item.fatG));
     el.addEventListener('click', async () => {
       try {
         const { food } = await foodsApi.saveExternal(item);
