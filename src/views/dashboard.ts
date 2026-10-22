@@ -527,7 +527,7 @@ function showEditMealModal(meal: MealLog, date: string) {
 
   if (hasFoodRef) {
     body.innerHTML = `
-      ${meal.food_brand ? `<p class="food-brand">${meal.food_brand}</p>` : ''}
+      ${meal.food_brand ? '<p class="food-brand"></p>' : ''}
       <div class="modal-macros">
         <div class="modal-macro"><strong>${Math.round(perUnitCal)}</strong> kcal</div>
         <div class="modal-macro"><strong>${Math.round(perUnitC * 10) / 10}g</strong> carbs</div>
@@ -564,6 +564,7 @@ function showEditMealModal(meal: MealLog, date: string) {
       </div>
     `;
 
+    if (meal.food_brand) body.querySelector('.food-brand')!.textContent = meal.food_brand;
     const perUnitLabel = meal.unit_label
       || (meal.serving_size && meal.serving_unit ? `${meal.serving_size}${meal.serving_unit}` : 'serving');
     document.getElementById('edit-per-label')!.textContent = `Per ${perUnitLabel}`;
