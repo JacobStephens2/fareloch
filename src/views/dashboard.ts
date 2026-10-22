@@ -356,6 +356,7 @@ function renderMeals(container: HTMLElement, mealList: MealLog[], date: string) 
   };
   mealList.forEach((m) => grouped[m.meal_type]?.push(m));
 
+  const mealItemText = new Map<number, { name: string; brand: string | null }>();
   let html = '';
   for (const type of MEAL_ORDER) {
     const items = grouped[type];
@@ -397,17 +398,17 @@ function renderMeals(container: HTMLElement, mealList: MealLog[], date: string) 
     } else {
       for (const item of items) {
         const name = item.food_name || item.recipe_name || item.note || 'Quick entry';
-        const brand = item.food_brand ? `<span class="food-brand">${item.food_brand}</span>` : '';
         const displayServings = item.unit_scale ? item.servings / item.unit_scale : item.servings;
         const servingsLabel = displayServings !== 1 ? `${parseFloat(displayServings.toFixed(2))}x ` : '';
         const timeStr = item.created_at ? new Date(item.created_at + 'Z').toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+        mealItemText.set(item.id, { name: `${servingsLabel}${name}`, brand: item.food_brand });
         html += `
           <div class="meal-item-wrapper" data-id="${item.id}">
             <div class="meal-item-swipe-bg">Delete</div>
             <div class="meal-item" data-id="${item.id}">
               <div class="meal-item-info">
-                <span class="meal-item-name">${servingsLabel}${name}</span>
-                ${brand}
+                <span class="meal-item-name"></span>
+                ${item.food_brand ? '<span class="food-brand"></span>' : ''}
                 ${timeStr ? `<span class="food-serving">${timeStr}</span>` : ''}
               </div>
               <div class="meal-item-macros">
@@ -430,6 +431,13 @@ function renderMeals(container: HTMLElement, mealList: MealLog[], date: string) 
   }
 
   container.innerHTML = html;
+
+  container.querySelectorAll<HTMLElement>('.meal-item').forEach((el) => {
+    const text = mealItemText.get(Number(el.dataset.id));
+    if (!text) return;
+    el.querySelector('.meal-item-name')!.textContent = text.name;
+    if (text.brand) el.querySelector('.food-brand')!.textContent = text.brand;
+  });
 
   // Add food buttons
   container.querySelectorAll('.btn-add-meal').forEach((btn) => {
@@ -527,16 +535,16 @@ function showEditMealModal(meal: MealLog, date: string) {
 
   if (hasFoodRef) {
     body.innerHTML = `
-      ${meal.food_brand ? `<p class="food-brand">${meal.food_brand}</p>` : ''}
+      ${meal.food_brand ? '<p class="food-brand"></p>' : ''}
       <div class="modal-macros">
         <div class="modal-macro"><strong>${Math.round(perUnitCal)}</strong> kcal</div>
         <div class="modal-macro"><strong>${Math.round(perUnitC * 10) / 10}g</strong> carbs</div>
         <div class="modal-macro"><strong>${Math.round(perUnitP * 10) / 10}g</strong> protein</div>
         <div class="modal-macro"><strong>${Math.round(perUnitF * 10) / 10}g</strong> fat</div>
       </div>
-      <p class="text-muted">Per ${meal.unit_label || (meal.serving_size && meal.serving_unit ? `${meal.serving_size}${meal.serving_unit}` : 'serving')}</p>
+      <p class="text-muted" id="edit-per-label"></p>
       <div class="form-group">
-        <label for="edit-servings">${meal.unit_label ? meal.unit_label : 'Servings'}</label>
+        <label for="edit-servings" id="edit-qty-label"></label>
         <div class="servings-control">
           <button type="button" id="edit-serv-minus" class="btn-icon">-</button>
           <input type="number" id="edit-servings" value="${parseFloat(displayQty.toFixed(2))}" min="1" step="1" />
@@ -563,6 +571,12 @@ function showEditMealModal(meal: MealLog, date: string) {
         <button type="button" id="edit-delete-btn" class="btn btn-danger" style="flex:0 0 auto">Delete</button>
       </div>
     `;
+
+    if (meal.food_brand) body.querySelector('.food-brand')!.textContent = meal.food_brand;
+    const perUnitLabel = meal.unit_label
+      || (meal.serving_size && meal.serving_unit ? `${meal.serving_size}${meal.serving_unit}` : 'serving');
+    document.getElementById('edit-per-label')!.textContent = `Per ${perUnitLabel}`;
+    document.getElementById('edit-qty-label')!.textContent = meal.unit_label ? meal.unit_label : 'Servings';
 
     const servingsInput = document.getElementById('edit-servings') as HTMLInputElement;
     const updateTotal = () => {

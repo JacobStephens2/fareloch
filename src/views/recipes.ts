@@ -1,5 +1,7 @@
 import { recipes as recipesApi, foods as foodsApi } from '../api';
-import { navigate } from '../router';
+import { navigate, setCleanup } from '../router';
+import { createFoodSearchSession, type FoodSearchResult } from '../food-search-session';
+import { assignFoodDetailText, assignPerUnitMacros, assignSavedMeasureOptions, assignTotalMacros, macroChips, measureCountSuffix, savedMeasureSuffix, sourceLabel, textSpan } from './food-search-text';
 import type { Food, FoodMeasure, RecipeIngredient } from '../types';
 import { macrosOf, scaleMacros, recipePerServing, roundMacros, unitScale, caloriesFromMacros } from '../../server/src/nutrition';
 
@@ -152,8 +154,20 @@ export function recipeEditView(params: Record<string, string>) {
     `,
     init: () => {
       const ingredients: { foodId: number; servings: number; qty?: number; food: Food | RecipeIngredient; unitLabel?: string }[] = [];
-      let searchTimeout: ReturnType<typeof setTimeout>;
       let mode: 'ingredients' | 'manual' = 'ingredients';
+      const searchInput = document.getElementById('ing-search') as HTMLInputElement;
+      const results = document.getElementById('ing-results')!;
+      const session = createFoodSearchSession({
+        search: query => foodsApi.search(query),
+        onChange: snapshot => {
+          searchInput.classList.toggle('searching', snapshot.status === 'debouncing' || snapshot.status === 'loading');
+          results.innerHTML = '';
+          results.classList.toggle('hidden', snapshot.status !== 'ready' && snapshot.status !== 'error');
+          if (snapshot.status === 'ready') renderIngredientResults(snapshot.result);
+          if (snapshot.status === 'error') results.innerHTML = '<p class="form-error" style="padding:8px">Search failed</p>';
+        },
+      });
+      setCleanup(() => session.dispose());
 
       document.getElementById('back-btn')!.addEventListener('click', () => navigate('#/recipes'));
 
@@ -173,23 +187,14 @@ export function recipeEditView(params: Record<string, string>) {
         try { measures = food.measures ? JSON.parse(food.measures) : []; } catch { /* */ }
         const hasMeasures = measures.length > 0;
 
-        const base = macrosOf(food);
-        const baseDisplay = roundMacros(base, 'display');
-
         body.innerHTML = `
-          ${food.brand ? `<p class="food-brand">${food.brand}</p>` : ''}
-          <div class="modal-macros" id="ing-modal-per-unit">
-            <div class="modal-macro"><strong>${baseDisplay.calories}</strong> kcal</div>
-            <div class="modal-macro"><strong>${baseDisplay.carbsG}g</strong> carbs</div>
-            <div class="modal-macro"><strong>${baseDisplay.proteinG}g</strong> protein</div>
-            <div class="modal-macro"><strong>${baseDisplay.fatG}g</strong> fat</div>
-          </div>
-          <p class="text-muted" id="ing-modal-per-label">Per ${food.serving_size}${food.serving_unit}</p>
+          ${food.brand ? '<p class="food-brand"></p>' : ''}
+          <div class="modal-macros" id="ing-modal-per-unit"></div>
+          <p class="text-muted" id="ing-modal-per-label"></p>
           ${hasMeasures ? `<div class="form-group">
             <label for="ing-unit-select">Unit</label>
             <select id="ing-unit-select">
-              <option value="default">${food.serving_size}${food.serving_unit} (default)</option>
-              ${measures.map((m, i) => `<option value="${i}">${m.label} (${m.gramWeight}g)</option>`).join('')}
+              <option value="default"></option>
             </select>
           </div>` : ''}
           <div class="form-group">
@@ -206,6 +211,15 @@ export function recipeEditView(params: Record<string, string>) {
             ${isEdit ? '<button type="button" id="ing-remove-btn" class="btn btn-danger" style="flex:0 0 auto">Remove</button>' : ''}
           </div>
         `;
+        assignFoodDetailText(
+          body,
+          food,
+          document.getElementById('ing-modal-per-label')!,
+          document.querySelector('#ing-unit-select option[value="default"]'),
+        );
+        const perUnit = document.getElementById('ing-modal-per-unit')!;
+        const total = document.getElementById('ing-modal-total')!;
+        assignPerUnitMacros(perUnit, food);
 
         let scale = 1;
         // When editing, recover the unit scale from stored servings and qty
@@ -215,26 +229,15 @@ export function recipeEditView(params: Record<string, string>) {
         }
         const qtyInput = document.getElementById('ing-qty') as HTMLInputElement;
         const unitSelect = document.getElementById('ing-unit-select') as HTMLSelectElement | null;
+        if (unitSelect) assignSavedMeasureOptions(unitSelect, measures);
 
         const updateTotal = () => {
           const qty = parseFloat(qtyInput.value) || 1;
-          const total = roundMacros(scaleMacros(base, qty * scale), 'display');
-          document.getElementById('ing-modal-total')!.innerHTML = `
-            <span>${total.calories} kcal</span>
-            <span>${total.carbsG}g C</span>
-            <span>${total.proteinG}g P</span>
-            <span>${total.fatG}g F</span>
-          `;
+          assignTotalMacros(total, food, scale * qty, 'rounded');
         };
 
         const updatePerUnit = () => {
-          const perUnit = roundMacros(scaleMacros(base, scale), 'display');
-          document.getElementById('ing-modal-per-unit')!.innerHTML = `
-            <div class="modal-macro"><strong>${perUnit.calories}</strong> kcal</div>
-            <div class="modal-macro"><strong>${perUnit.carbsG}g</strong> carbs</div>
-            <div class="modal-macro"><strong>${perUnit.proteinG}g</strong> protein</div>
-            <div class="modal-macro"><strong>${perUnit.fatG}g</strong> fat</div>
-          `;
+          assignPerUnitMacros(perUnit, food, scale, 'rounded');
         };
 
         if (unitSelect) {
@@ -283,8 +286,8 @@ export function recipeEditView(params: Record<string, string>) {
           }
           renderIngredients(ingredients, mode, onEditIngredient);
           modal.classList.add('hidden');
-          document.getElementById('ing-results')!.classList.add('hidden');
-          (document.getElementById('ing-search') as HTMLInputElement).value = '';
+          searchInput.value = '';
+          session.setQuery('');
         });
 
         document.getElementById('ing-remove-btn')?.addEventListener('click', () => {
@@ -310,6 +313,7 @@ export function recipeEditView(params: Record<string, string>) {
           document.querySelector('[data-mode].active')?.classList.remove('active');
           tab.classList.add('active');
           mode = (tab as HTMLElement).dataset.mode as 'ingredients' | 'manual';
+          session.setActive(mode === 'ingredients');
           document.getElementById('ingredients-section')!.classList.toggle('hidden', mode === 'manual');
           document.getElementById('manual-section')!.classList.toggle('hidden', mode === 'ingredients');
           updateTotals(ingredients, mode);
@@ -340,6 +344,7 @@ export function recipeEditView(params: Record<string, string>) {
       if (!isNew) {
         loadExistingRecipe(parseInt(params.id), ingredients, (recipeMode) => {
           mode = recipeMode;
+          session.setActive(mode === 'ingredients');
           if (mode === 'manual') {
             document.querySelector('[data-mode="ingredients"]')?.classList.remove('active');
             document.querySelector('[data-mode="manual"]')?.classList.add('active');
@@ -350,76 +355,57 @@ export function recipeEditView(params: Record<string, string>) {
       }
 
       // Ingredient search
-      const searchInput = document.getElementById('ing-search') as HTMLInputElement;
       searchInput.addEventListener('input', () => {
-        clearTimeout(searchTimeout);
-        const q = searchInput.value.trim();
-        if (q.length < 2) {
-          document.getElementById('ing-results')!.classList.add('hidden');
-          searchInput.classList.remove('searching');
-          return;
-        }
-        searchInput.classList.add('searching');
-        searchTimeout = setTimeout(async () => {
-          try {
-            const { foods, external } = await foodsApi.search(q);
-            const results = document.getElementById('ing-results')!;
-            results.innerHTML = '';
-            results.classList.remove('hidden');
-
-            for (const food of foods) {
-              const item = document.createElement('div');
-              item.className = 'food-item food-item-sm';
-              item.innerHTML = `
-                <div class="food-item-info">
-                  <span class="food-item-name">${food.name}${food.brand ? ` (${food.brand})` : ''}</span>
-                  <span class="food-serving">${food.serving_size}${food.serving_unit}${(() => { try { const m = food.measures ? JSON.parse(food.measures) : []; return m.length ? ` · ${m.length + 1} units` : ''; } catch { return ''; } })()} · ${Math.round(food.calories)} kcal</span>
-                </div>
-                <div class="food-item-macros">
-                  <span class="macro-chip chip-carbs">${Math.round(food.carbs_g)}c</span>
-                  <span class="macro-chip chip-protein">${Math.round(food.protein_g)}p</span>
-                  <span class="macro-chip chip-fat">${Math.round(food.fat_g)}f</span>
-                </div>
-              `;
-              item.addEventListener('click', () => {
-                showIngredientModal(food);
-              });
-              results.appendChild(item);
-            }
-
-            for (const ext of external) {
-              const item = document.createElement('div');
-              item.className = 'food-item food-item-sm';
-              item.innerHTML = `
-                <div class="food-item-info">
-                  <span class="food-item-name">${ext.name}${ext.brand ? ` (${ext.brand})` : ''}</span>
-                  <span class="food-serving">${ext.servingSize}${ext.servingUnit}${ext.measures?.length ? ` · ${ext.measures.length + 1} units` : ''} · ${Math.round(ext.calories)} kcal</span>
-                </div>
-                <div class="food-item-macros">
-                  <span class="macro-chip chip-carbs">${Math.round(ext.carbsG)}c</span>
-                  <span class="macro-chip chip-protein">${Math.round(ext.proteinG)}p</span>
-                  <span class="macro-chip chip-fat">${Math.round(ext.fatG)}f</span>
-                </div>
-              `;
-              item.addEventListener('click', async () => {
-                try {
-                  const { food } = await foodsApi.saveExternal(ext);
-                  showIngredientModal(food);
-                } catch {
-                  alert('Failed to save food');
-                }
-              });
-              results.appendChild(item);
-            }
-
-            if (foods.length === 0 && external.length === 0) {
-              results.innerHTML = '<p class="text-muted" style="padding:8px">No results</p>';
-            }
-          } finally {
-            searchInput.classList.remove('searching');
-          }
-        }, 400);
+        session.setQuery(searchInput.value);
       });
+      session.setActive(true);
+
+      function renderIngredientResults({ foods, external }: FoodSearchResult) {
+        for (const food of foods) {
+          const item = document.createElement('div');
+          item.className = 'food-item food-item-sm';
+          const info = document.createElement('div');
+          info.className = 'food-item-info';
+          const serving = textSpan('food-serving', `${food.serving_size}${food.serving_unit}${savedMeasureSuffix(food.measures)} · `);
+          serving.append(sourceLabel(food.source), document.createTextNode(` · ${Math.round(food.calories)} kcal`));
+          info.append(
+            textSpan('food-item-name', `${food.name}${food.brand ? ` (${food.brand})` : ''}`),
+            serving,
+          );
+          item.append(info, macroChips({ carbs: food.carbs_g, protein: food.protein_g, fat: food.fat_g }));
+          item.addEventListener('click', () => {
+            showIngredientModal(food);
+          });
+          results.appendChild(item);
+        }
+
+        for (const ext of external) {
+          const serving = textSpan('food-serving', `${ext.servingSize}${ext.servingUnit}${measureCountSuffix(ext.measures?.length ?? 0)} · `);
+          serving.append(sourceLabel(ext.source), document.createTextNode(` · ${Math.round(ext.calories)} kcal`));
+          const info = document.createElement('div');
+          info.className = 'food-item-info';
+          info.append(
+            textSpan('food-item-name', `${ext.name}${ext.brand ? ` (${ext.brand})` : ''}`),
+            serving,
+          );
+          const item = document.createElement('div');
+          item.className = 'food-item food-item-sm';
+          item.append(info, macroChips({ carbs: ext.carbsG, protein: ext.proteinG, fat: ext.fatG }));
+          item.addEventListener('click', async () => {
+            try {
+              const { food } = await foodsApi.saveExternal(ext);
+              showIngredientModal(food);
+            } catch {
+              alert('Failed to save food');
+            }
+          });
+          results.appendChild(item);
+        }
+
+        if (foods.length === 0 && external.length === 0) {
+          results.innerHTML = '<p class="text-muted" style="padding:8px">No results</p>';
+        }
+      }
 
       // Form submit
       document.getElementById('recipe-form')!.addEventListener('submit', async (e) => {
@@ -590,11 +576,12 @@ function renderIngredients(
 
     const el = document.createElement('div');
     el.className = 'ingredient-row';
-    el.innerHTML = `
-      <div class="ingredient-info ingredient-clickable" data-idx="${idx}">
-        <span class="ingredient-name">${f.name}</span>
-        <span class="ingredient-unit">${unit}</span>
-      </div>
+    const info = document.createElement('div');
+    info.className = 'ingredient-info ingredient-clickable';
+    info.dataset.idx = String(idx);
+    info.append(textSpan('ingredient-name', f.name), textSpan('ingredient-unit', unit));
+    el.appendChild(info);
+    el.insertAdjacentHTML('beforeend', `
       <div class="ingredient-macros">
         <span class="macro-chip chip-calories">${Math.round(macros.calories)}</span>
         <span class="macro-chip chip-carbs">${Math.round(macros.carbsG)}c</span>
@@ -602,7 +589,7 @@ function renderIngredients(
         <span class="macro-chip chip-fat">${Math.round(macros.fatG)}f</span>
       </div>
       <button type="button" class="btn-icon btn-remove-ing" data-idx="${idx}">&times;</button>
-    `;
+    `);
     container.appendChild(el);
   });
 
