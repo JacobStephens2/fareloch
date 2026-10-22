@@ -1,7 +1,7 @@
 import { recipes as recipesApi, foods as foodsApi } from '../api';
 import { navigate, setCleanup } from '../router';
 import { createFoodSearchSession, type FoodSearchResult } from '../food-search-session';
-import { macroChips, measureCountSuffix, savedMeasureSuffix, sourceLabel, textSpan } from './food-search-text';
+import { assignFoodDetailText, macroChips, measureCountSuffix, savedMeasureSuffix, sourceLabel, textSpan } from './food-search-text';
 import type { Food, FoodMeasure, RecipeIngredient } from '../types';
 
 export function recipesView() {
@@ -212,9 +212,12 @@ export function recipeEditView(params: Record<string, string>) {
             ${isEdit ? '<button type="button" id="ing-remove-btn" class="btn btn-danger" style="flex:0 0 auto">Remove</button>' : ''}
           </div>
         `;
-        if (food.brand) body.querySelector('.food-brand')!.appendChild(document.createTextNode(food.brand));
-        document.getElementById('ing-modal-per-label')!.appendChild(document.createTextNode(`Per ${food.serving_size}${food.serving_unit}`));
-        document.querySelector('#ing-unit-select option[value="default"]')?.appendChild(document.createTextNode(`${food.serving_size}${food.serving_unit} (default)`));
+        assignFoodDetailText(
+          body,
+          food,
+          document.getElementById('ing-modal-per-label')!,
+          document.querySelector('#ing-unit-select option[value="default"]'),
+        );
 
         let unitScale = 1;
         // When editing, recover the unit scale from stored servings and qty

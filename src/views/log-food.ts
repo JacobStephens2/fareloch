@@ -2,7 +2,7 @@ import { foods as foodsApi, meals as mealsApi, recipes as recipesApi } from '../
 import { navigate, getQueryParams, setCleanup } from '../router';
 import { toLocalDateStr } from '../state';
 import { createFoodSearchSession, type FoodSearchResult } from '../food-search-session';
-import { macroChips, measureCountSuffix, savedMeasureSuffix, sourceLabel, textSpan } from './food-search-text';
+import { assignFoodDetailText, macroChips, measureCountSuffix, savedMeasureSuffix, sourceLabel, textSpan } from './food-search-text';
 import type { Food, ExternalFood, FoodMeasure, Recipe, MealType } from '../types';
 
 export function logFoodView() {
@@ -503,9 +503,12 @@ function showAddModal(food: Food, mealType: MealType, date: string) {
     </div>
     <button id="add-food-btn" class="btn btn-primary btn-block">Add to ${capitalize(mealType)}</button>
   `;
-  if (food.brand) body.querySelector('.food-brand')!.appendChild(document.createTextNode(food.brand));
-  document.getElementById('modal-per-label')!.appendChild(document.createTextNode(`Per ${food.serving_size}${food.serving_unit}`));
-  document.querySelector('#unit-select option[value="default"]')?.appendChild(document.createTextNode(`${food.serving_size}${food.serving_unit} (default)`));
+  assignFoodDetailText(
+    body,
+    food,
+    document.getElementById('modal-per-label')!,
+    document.querySelector('#unit-select option[value="default"]'),
+  );
 
   let unitScale = 1; // multiplier for selected unit vs default serving
 
