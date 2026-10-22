@@ -505,11 +505,11 @@ function showAddModal(food: Food, mealType: MealType, date: string) {
 
   const updateTotal = () => {
     const qty = parseFloat(servingsInput.value) || 1;
-    assignTotalMacros(total, food, unitScale * qty, 'scaled');
+    assignTotalMacros(total, food, unitScale * qty, 'rounded');
   };
 
   const updatePerUnit = () => {
-    assignPerUnitMacros(perUnit, food, unitScale, 'scaled');
+    assignPerUnitMacros(perUnit, food, unitScale, 'rounded');
   };
 
   if (unitSelect) {

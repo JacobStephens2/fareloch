@@ -34,20 +34,24 @@ type SavedFoodMacros = {
   fat_g: number;
 };
 
+type MacroRounding = 'exact' | 'rounded';
+
 // Non-finite saved amounts stay text; only finite numbers are scaled.
-function macroText(value: number, scale: number, round: 'none' | 'kcal' | 'tenth'): string {
+function macroText(value: number, scale: number, rounding: MacroRounding, place: 'kcal' | 'gram'): string {
   const numeric = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(numeric)) return String(value);
-  if (round === 'none' && scale === 1) return String(value);
+  if (rounding === 'exact') return String(value);
   const scaled = numeric * scale;
-  if (round === 'kcal') return String(Math.round(scaled));
-  if (round === 'tenth') return String(Math.round(scaled * 10) / 10);
-  return String(scaled);
+  return place === 'kcal' ? String(Math.round(scaled)) : String(Math.round(scaled * 10) / 10);
 }
 
-function macroRounds(amounts: 'saved' | 'scaled'): { calorie: 'none' | 'kcal'; gram: 'none' | 'tenth' } {
-  if (amounts === 'scaled') return { calorie: 'kcal', gram: 'tenth' };
-  return { calorie: 'none', gram: 'none' };
+function macroFigures(food: SavedFoodMacros, scale: number, rounding: MacroRounding) {
+  return {
+    calories: macroText(food.calories, scale, rounding, 'kcal'),
+    carbs: macroText(food.carbs_g, scale, rounding, 'gram'),
+    protein: macroText(food.protein_g, scale, rounding, 'gram'),
+    fat: macroText(food.fat_g, scale, rounding, 'gram'),
+  };
 }
 
 function macroLine(strongText: string, label: string): HTMLDivElement {
@@ -69,15 +73,15 @@ export function assignPerUnitMacros(
   container: Element,
   food: SavedFoodMacros,
   scale = 1,
-  amounts: 'saved' | 'scaled' = 'saved',
+  rounding: MacroRounding = 'exact',
 ): void {
-  const round = macroRounds(amounts);
+  const figures = macroFigures(food, scale, rounding);
   container.textContent = '';
   container.append(
-    macroLine(macroText(food.calories, scale, round.calorie), 'kcal'),
-    macroLine(`${macroText(food.carbs_g, scale, round.gram)}g`, 'carbs'),
-    macroLine(`${macroText(food.protein_g, scale, round.gram)}g`, 'protein'),
-    macroLine(`${macroText(food.fat_g, scale, round.gram)}g`, 'fat'),
+    macroLine(figures.calories, 'kcal'),
+    macroLine(`${figures.carbs}g`, 'carbs'),
+    macroLine(`${figures.protein}g`, 'protein'),
+    macroLine(`${figures.fat}g`, 'fat'),
   );
 }
 
@@ -85,15 +89,15 @@ export function assignTotalMacros(
   container: Element,
   food: SavedFoodMacros,
   scale = 1,
-  amounts: 'saved' | 'scaled' = 'saved',
+  rounding: MacroRounding = 'exact',
 ): void {
-  const round = macroRounds(amounts);
+  const figures = macroFigures(food, scale, rounding);
   container.textContent = '';
   container.append(
-    totalLine(`${macroText(food.calories, scale, round.calorie)} kcal`),
-    totalLine(`${macroText(food.carbs_g, scale, round.gram)}g C`),
-    totalLine(`${macroText(food.protein_g, scale, round.gram)}g P`),
-    totalLine(`${macroText(food.fat_g, scale, round.gram)}g F`),
+    totalLine(`${figures.calories} kcal`),
+    totalLine(`${figures.carbs}g C`),
+    totalLine(`${figures.protein}g P`),
+    totalLine(`${figures.fat}g F`),
   );
 }
 

@@ -223,11 +223,11 @@ export function recipeEditView(params: Record<string, string>) {
 
         const updateTotal = () => {
           const qty = parseFloat(qtyInput.value) || 1;
-          assignTotalMacros(total, food, unitScale * qty, 'scaled');
+          assignTotalMacros(total, food, unitScale * qty, 'rounded');
         };
 
         const updatePerUnit = () => {
-          assignPerUnitMacros(perUnit, food, unitScale, 'scaled');
+          assignPerUnitMacros(perUnit, food, unitScale, 'rounded');
         };
 
         if (unitSelect) {
