@@ -15,6 +15,18 @@ export function assignFoodDetailText(
   if (defaultOption) defaultOption.textContent = `${food.serving_size}${food.serving_unit} (default)`;
 }
 
+export function assignSavedMeasureOptions(
+  select: Element,
+  measures: { label: string; gramWeight: number }[],
+): void {
+  measures.forEach((measure, index) => {
+    const option = document.createElement('option');
+    option.value = String(index);
+    option.textContent = `${measure.label} (${measure.gramWeight}g)`;
+    select.append(option);
+  });
+}
+
 export function textSpan(className: string, text: string): HTMLSpanElement {
   const span = document.createElement('span');
   span.className = className;

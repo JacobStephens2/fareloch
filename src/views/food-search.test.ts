@@ -522,6 +522,33 @@ it('Log Food add modal and Recipe editor ingredient modal show brand, serving, a
   expect(ingredientModal.querySelector('#ing-unit-select option[value="default"]')!.textContent).toBe('100g<img alt="unit"> (default)');
 });
 
+it('Log Food add modal and Recipe editor ingredient modal show saved measure label and gram weight as text', async () => {
+  const item = food('Apple');
+  item.measures = JSON.stringify([
+    { label: 'cup<img alt="measure">', gramWeight: 200 },
+    { label: 'slice</option><img alt="slice">', gramWeight: 30 },
+  ]);
+  vi.mocked(foods.search).mockResolvedValue({ foods: [item], external: [] });
+
+  go('/log');
+  input('#food-search', 'apple');
+  await vi.advanceTimersByTimeAsync(400);
+  click('#tab-content .food-item');
+  const addModal = document.querySelector('#food-detail-modal')!;
+  expect(addModal.querySelector('img')).toBeNull();
+  expect(addModal.querySelector('#unit-select option[value="0"]')!.textContent).toBe('cup<img alt="measure"> (200g)');
+  expect(addModal.querySelector('#unit-select option[value="1"]')!.textContent).toBe('slice</option><img alt="slice"> (30g)');
+
+  go('/recipe');
+  input('#ing-search', 'apple');
+  await vi.advanceTimersByTimeAsync(400);
+  click('#ing-results .food-item');
+  const ingredientModal = document.querySelector('#ing-modal')!;
+  expect(ingredientModal.querySelector('img')).toBeNull();
+  expect(ingredientModal.querySelector('#ing-unit-select option[value="0"]')!.textContent).toBe('cup<img alt="measure"> (200g)');
+  expect(ingredientModal.querySelector('#ing-unit-select option[value="1"]')!.textContent).toBe('slice</option><img alt="slice"> (30g)');
+});
+
 it('recipe ingredient list shows the name and unit as text', async () => {
   const name = 'Apple<img alt="ingredient-name">';
   const unit = 'cup<img alt="ingredient-unit">';

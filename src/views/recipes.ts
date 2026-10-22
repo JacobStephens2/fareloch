@@ -1,7 +1,7 @@
 import { recipes as recipesApi, foods as foodsApi } from '../api';
 import { navigate, setCleanup } from '../router';
 import { createFoodSearchSession, type FoodSearchResult } from '../food-search-session';
-import { assignFoodDetailText, macroChips, measureCountSuffix, savedMeasureSuffix, sourceLabel, textSpan } from './food-search-text';
+import { assignFoodDetailText, assignSavedMeasureOptions, macroChips, measureCountSuffix, savedMeasureSuffix, sourceLabel, textSpan } from './food-search-text';
 import type { Food, FoodMeasure, RecipeIngredient } from '../types';
 
 export function recipesView() {
@@ -195,7 +195,6 @@ export function recipeEditView(params: Record<string, string>) {
             <label for="ing-unit-select">Unit</label>
             <select id="ing-unit-select">
               <option value="default"></option>
-              ${measures.map((m, i) => `<option value="${i}">${m.label} (${m.gramWeight}g)</option>`).join('')}
             </select>
           </div>` : ''}
           <div class="form-group">
@@ -227,6 +226,7 @@ export function recipeEditView(params: Record<string, string>) {
         }
         const qtyInput = document.getElementById('ing-qty') as HTMLInputElement;
         const unitSelect = document.getElementById('ing-unit-select') as HTMLSelectElement | null;
+        if (unitSelect) assignSavedMeasureOptions(unitSelect, measures);
 
         const updateTotal = () => {
           const qty = parseFloat(qtyInput.value) || 1;
