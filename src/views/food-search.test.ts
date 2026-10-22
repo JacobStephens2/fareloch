@@ -316,6 +316,51 @@ it.each(['/other', '/missing'])('pending searches and tab loads cannot publish a
   expect(tabContent.innerHTML).toBe(previous);
 });
 
+it('Recent and My Foods tabs do not show a source label outside the food search session', async () => {
+  const recent = food('Recent apple');
+  recent.source = 'sample';
+  const custom = food('Custom apple');
+  custom.source = 'manual';
+  vi.mocked(foods.recent).mockResolvedValue({ foods: [recent] });
+  vi.mocked(foods.custom).mockResolvedValue({ foods: [custom] });
+  go('/log');
+  await vi.advanceTimersByTimeAsync(0);
+  expect(document.querySelector('#tab-content .food-source')!.textContent).toBe('sample');
+  click('[data-tab="recent"]');
+  await vi.advanceTimersByTimeAsync(0);
+  expect(document.querySelector('#tab-content .food-source')).toBeNull();
+  expect(document.querySelector('#tab-content')!.textContent).toContain('Recent apple');
+  expect(document.querySelector('#tab-content')!.textContent).not.toContain('sample');
+  click('[data-tab="custom"]');
+  await vi.advanceTimersByTimeAsync(0);
+  expect(document.querySelector('#tab-content .food-source')).toBeNull();
+  expect(document.querySelector('#tab-content')!.textContent).toContain('Custom apple');
+  expect(document.querySelector('#tab-content')!.textContent).not.toContain('manual');
+});
+
+it.each(['/log', '/recipe'])('%s shows search result name, brand, serving unit, and source label as text', async path => {
+  const tag = (field: string) => `${field}<img alt="${field}">`;
+  const saved = food(tag('saved-name'));
+  saved.brand = tag('saved-brand');
+  saved.serving_unit = tag('saved-unit');
+  saved.source = tag('saved-source');
+  const external: ExternalFood = {
+    name: tag('external-name'), brand: tag('external-brand'), barcode: null,
+    servingSize: 100, servingUnit: tag('external-unit'),
+    calories: 100, carbsG: 10, proteinG: 5, fatG: 4, fiberG: 0, sugarG: 0,
+    source: tag('external-source'), sourceId: '1',
+  };
+  vi.mocked(foods.search).mockResolvedValue({ foods: [saved], external: [external] });
+  go(path);
+  input(path === '/log' ? '#food-search' : '#ing-search', 'apple');
+  await vi.advanceTimersByTimeAsync(400);
+  const container = document.querySelector(path === '/log' ? '#tab-content' : '#ing-results')!;
+  expect(container.querySelector('img')).toBeNull();
+  for (const field of ['saved-name', 'saved-brand', 'saved-unit', 'saved-source', 'external-name', 'external-brand', 'external-unit', 'external-source']) {
+    expect(container.textContent).toContain(tag(field));
+  }
+});
+
 it('Log Food retains saved/external selection, source badges, attribution and meal context', async () => {
   const external: ExternalFood = {
     name: 'External apple', brand: null, barcode: null, servingSize: 100, servingUnit: 'g',
@@ -329,7 +374,7 @@ it('Log Food retains saved/external selection, source badges, attribution and me
   await vi.advanceTimersByTimeAsync(400);
   expect(document.querySelector('#tab-content')!.textContent).toContain('Saved Foods');
   expect(document.querySelector('#tab-content')!.textContent).toContain('External Results');
-  expect(document.querySelector('#tab-content .food-source')!.textContent).toBe('FatSecret');
+  expect(document.querySelector('#tab-content .food-source.source-fatsecret')!.textContent).toBe('FatSecret');
   expect(document.querySelector('.api-attribution a')!.getAttribute('href')).toBe('https://platform.fatsecret.com');
   click('#tab-content .food-item');
   expect(document.querySelector('#modal-food-name')!.textContent).toBe('Saved apple');

@@ -1,6 +1,7 @@
 import { recipes as recipesApi, foods as foodsApi } from '../api';
 import { navigate, setCleanup } from '../router';
 import { createFoodSearchSession, type FoodSearchResult } from '../food-search-session';
+import { macroChips, measureCountSuffix, savedMeasureSuffix, sourceLabel, textSpan } from './food-search-text';
 import type { Food, FoodMeasure, RecipeIngredient } from '../types';
 
 export function recipesView() {
@@ -364,17 +365,15 @@ export function recipeEditView(params: Record<string, string>) {
         for (const food of foods) {
           const item = document.createElement('div');
           item.className = 'food-item food-item-sm';
-          item.innerHTML = `
-            <div class="food-item-info">
-              <span class="food-item-name">${food.name}${food.brand ? ` (${food.brand})` : ''}</span>
-              <span class="food-serving">${food.serving_size}${food.serving_unit}${(() => { try { const m = food.measures ? JSON.parse(food.measures) : []; return m.length ? ` · ${m.length + 1} units` : ''; } catch { return ''; } })()} · ${Math.round(food.calories)} kcal</span>
-            </div>
-            <div class="food-item-macros">
-              <span class="macro-chip chip-carbs">${Math.round(food.carbs_g)}c</span>
-              <span class="macro-chip chip-protein">${Math.round(food.protein_g)}p</span>
-              <span class="macro-chip chip-fat">${Math.round(food.fat_g)}f</span>
-            </div>
-          `;
+          const info = document.createElement('div');
+          info.className = 'food-item-info';
+          const serving = textSpan('food-serving', `${food.serving_size}${food.serving_unit}${savedMeasureSuffix(food.measures)} · `);
+          serving.append(sourceLabel(food.source), document.createTextNode(` · ${Math.round(food.calories)} kcal`));
+          info.append(
+            textSpan('food-item-name', `${food.name}${food.brand ? ` (${food.brand})` : ''}`),
+            serving,
+          );
+          item.append(info, macroChips({ carbs: food.carbs_g, protein: food.protein_g, fat: food.fat_g }));
           item.addEventListener('click', () => {
             showIngredientModal(food);
           });
@@ -382,19 +381,17 @@ export function recipeEditView(params: Record<string, string>) {
         }
 
         for (const ext of external) {
+          const serving = textSpan('food-serving', `${ext.servingSize}${ext.servingUnit}${measureCountSuffix(ext.measures?.length ?? 0)} · `);
+          serving.append(sourceLabel(ext.source), document.createTextNode(` · ${Math.round(ext.calories)} kcal`));
+          const info = document.createElement('div');
+          info.className = 'food-item-info';
+          info.append(
+            textSpan('food-item-name', `${ext.name}${ext.brand ? ` (${ext.brand})` : ''}`),
+            serving,
+          );
           const item = document.createElement('div');
           item.className = 'food-item food-item-sm';
-          item.innerHTML = `
-            <div class="food-item-info">
-              <span class="food-item-name">${ext.name}${ext.brand ? ` (${ext.brand})` : ''}</span>
-              <span class="food-serving">${ext.servingSize}${ext.servingUnit}${ext.measures?.length ? ` · ${ext.measures.length + 1} units` : ''} · ${Math.round(ext.calories)} kcal</span>
-            </div>
-            <div class="food-item-macros">
-              <span class="macro-chip chip-carbs">${Math.round(ext.carbsG)}c</span>
-              <span class="macro-chip chip-protein">${Math.round(ext.proteinG)}p</span>
-              <span class="macro-chip chip-fat">${Math.round(ext.fatG)}f</span>
-            </div>
-          `;
+          item.append(info, macroChips({ carbs: ext.carbsG, protein: ext.proteinG, fat: ext.fatG }));
           item.addEventListener('click', async () => {
             try {
               const { food } = await foodsApi.saveExternal(ext);
