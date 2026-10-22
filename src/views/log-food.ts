@@ -342,7 +342,10 @@ async function lookupBarcode(code: string, mealType: MealType, date: string) {
     found.append('Found: ', document.createTextNode(food.name));
     content.replaceChildren(found);
   } catch {
-    content.innerHTML = `<p class="form-error">No product found for barcode ${code}</p>`;
+    const missing = document.createElement('p');
+    missing.className = 'form-error';
+    missing.append('No product found for barcode ', document.createTextNode(code));
+    content.replaceChildren(missing);
   }
 }
 

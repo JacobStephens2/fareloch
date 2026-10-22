@@ -7,6 +7,8 @@ import { deferred, food, result } from '../test/food-search-fixtures';
 import type { FoodSearchResult } from '../food-search-session';
 import type { ExternalFood, Recipe } from '../types';
 
+const scanner = vi.hoisted(() => ({ code: '0012345678905' }));
+
 vi.mock('../api', () => ({
   foods: { search: vi.fn(), recent: vi.fn(), custom: vi.fn(), saveExternal: vi.fn(), barcode: vi.fn() },
   recipes: { list: vi.fn(), get: vi.fn(), create: vi.fn() },
@@ -16,7 +18,7 @@ vi.mock('../api', () => ({
 vi.mock('html5-qrcode', () => ({
   Html5Qrcode: class {
     start(_camera: unknown, _config: unknown, onScan: (code: string) => void) {
-      onScan('0012345678905');
+      onScan(scanner.code);
       return Promise.resolve();
     }
     stop() {
@@ -79,6 +81,7 @@ it('cleared ingredient suggestions cannot be reopened by an old search', async (
 
 beforeEach(() => {
   go('/other');
+  scanner.code = '0012345678905';
   vi.resetAllMocks();
   vi.useFakeTimers();
   vi.mocked(foods.recent).mockResolvedValue({ foods: [] });
@@ -412,4 +415,16 @@ it('Log Food shows a scanned barcode found food name as text', async () => {
   const content = document.querySelector('#tab-content')!;
   expect(content.querySelector('img')).toBeNull();
   expect(content.textContent).toContain('Found: Found apple<img alt="found-name">');
+});
+
+it('Log Food shows an unmatched barcode as text', async () => {
+  scanner.code = '0012345678905<img alt="unmatched-code">';
+  vi.mocked(foods.barcode).mockRejectedValue(new Error('Product not found'));
+  go('/log');
+  await vi.advanceTimersByTimeAsync(0);
+  click('#scan-btn');
+  await vi.advanceTimersByTimeAsync(0);
+  const content = document.querySelector('#tab-content')!;
+  expect(content.querySelector('img')).toBeNull();
+  expect(content.textContent).toContain('No product found for barcode 0012345678905<img alt="unmatched-code">');
 });
