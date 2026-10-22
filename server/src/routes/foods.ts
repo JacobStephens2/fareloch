@@ -115,8 +115,10 @@ router.get('/barcode/:code', optionalAuth, async (req: Request, res: Response) =
     const code = req.params.code as string;
     const db = getDb();
 
-    // Check local cache first
-    const cached = db.prepare('SELECT * FROM foods WHERE barcode = ?').get(code) as any;
+    // Check this caller's cache first. An unsigned caller only sees an unowned row.
+    const cached = db.prepare(
+      'SELECT * FROM foods WHERE barcode = ? AND user_id IS ?'
+    ).get(code, req.user?.userId ?? null) as any;
     if (cached) {
       res.json({ food: cached });
       return;
@@ -164,11 +166,11 @@ router.get('/barcode/:code', optionalAuth, async (req: Request, res: Response) =
       return;
     }
 
-    // Cache it
+    // Cache it under the signed-in caller. An unsigned caller leaves the row unowned.
     const result = db.prepare(`
-      INSERT INTO foods (name, brand, barcode, serving_size, serving_unit, calories, carbs_g, protein_g, fat_g, fiber_g, sugar_g, source, source_id, measures)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(food.name, food.brand, food.barcode, food.serving_size, food.serving_unit,
+      INSERT INTO foods (user_id, name, brand, barcode, serving_size, serving_unit, calories, carbs_g, protein_g, fat_g, fiber_g, sugar_g, source, source_id, measures)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(req.user?.userId ?? null, food.name, food.brand, food.barcode, food.serving_size, food.serving_unit,
            food.calories, food.carbs_g, food.protein_g, food.fat_g, food.fiber_g, food.sugar_g,
            food.source, food.source_id, food.measures ? JSON.stringify(food.measures) : null);
 
@@ -265,14 +267,16 @@ router.delete('/:id', requireAuth, (req: Request, res: Response) => {
 });
 
 // Save an external food result to local DB for logging
-router.post('/save-external', optionalAuth, (req: Request, res: Response) => {
+router.post('/save-external', requireAuth, (req: Request, res: Response) => {
   try {
     const db = getDb();
     const { name, brand, barcode, servingSize, servingUnit, calories, carbsG, proteinG, fatG, fiberG, sugarG, source, sourceId, measures } = req.body;
 
-    // Check if already cached
+    // Check if this caller already saved this source record
     if (sourceId) {
-      const existing = db.prepare('SELECT * FROM foods WHERE source = ? AND source_id = ?').get(source, sourceId) as any;
+      const existing = db.prepare(
+        'SELECT * FROM foods WHERE source = ? AND source_id = ? AND user_id = ?'
+      ).get(source, sourceId, req.user!.userId) as any;
       if (existing) {
         res.json({ food: existing });
         return;
@@ -282,9 +286,9 @@ router.post('/save-external', optionalAuth, (req: Request, res: Response) => {
     const measuresJson = measures && measures.length > 0 ? JSON.stringify(measures) : null;
 
     const result = db.prepare(`
-      INSERT INTO foods (name, brand, barcode, serving_size, serving_unit, calories, carbs_g, protein_g, fat_g, fiber_g, sugar_g, source, source_id, measures)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(name, brand || null, barcode || null, servingSize || 1, servingUnit || 'serving',
+      INSERT INTO foods (user_id, name, brand, barcode, serving_size, serving_unit, calories, carbs_g, protein_g, fat_g, fiber_g, sugar_g, source, source_id, measures)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(req.user!.userId, name, brand || null, barcode || null, servingSize || 1, servingUnit || 'serving',
            calories || 0, carbsG || 0, proteinG || 0, fatG || 0, fiberG || 0, sugarG || 0,
            source || 'manual', sourceId || null, measuresJson);
 

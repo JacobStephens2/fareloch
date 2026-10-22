@@ -141,8 +141,9 @@ export const auth = {
 };
 
 // Foods
-// Search, barcode, and save-external always hit the server (endpoints allow unauthenticated access).
-// Guest mode uses local-db for user-specific operations (recent, custom, create, delete).
+// Search and barcode hit the server, including when the caller is not signed in.
+// Saving an external food on the server requires a signed-in caller.
+// Guest mode stores that save on this device, and uses local-db for recent, custom, create, and delete.
 export const foods = {
   search: (q: string) => {
     if (!isGuestMode()) {

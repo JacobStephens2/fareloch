@@ -7,9 +7,10 @@ const DB_PATH = path.join(__dirname, '..', 'data', 'macros.db');
 
 let db: Database.Database;
 
-export function getDb(): Database.Database {
+// The first call opens the file; later calls return that connection.
+export function getDb(file = DB_PATH): Database.Database {
   if (!db) {
-    db = new Database(DB_PATH);
+    db = new Database(file);
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
     initSchema();
