@@ -417,6 +417,72 @@ it('Log Food shows a scanned barcode found food name as text', async () => {
   expect(content.textContent).toContain('Found: Found apple<img alt="found-name">');
 });
 
+it('Log Food keeps a known meal type and uses snack for any other meal query', async () => {
+  const oats: Recipe = {
+    id: 1, user_id: 1, name: 'Oats', total_servings: 1, serving_unit: 'bowl',
+    manual_calories: null, manual_carbs_g: null, manual_protein_g: null, manual_fat_g: null,
+    ingredientCount: 1, perServing: { calories: 150, carbsG: 20, proteinG: 5, fatG: 3 },
+  };
+
+  async function shownMeal(meal: string | null) {
+    vi.mocked(foods.search).mockResolvedValue(result('Apple'));
+    vi.mocked(foods.custom).mockResolvedValue({ foods: [] });
+    vi.mocked(recipes.list).mockResolvedValue({ recipes: [oats] });
+    vi.mocked(meals.log).mockReturnValue(new Promise(() => {}));
+    go(meal === null ? '/log' : `/log?meal=${encodeURIComponent(meal)}`);
+    const heading = document.querySelector('.page-header h1')!.textContent;
+    input('#food-search', 'apple');
+    await vi.advanceTimersByTimeAsync(400);
+    click('#tab-content .food-item');
+    const foodButton = document.querySelector('#add-food-btn')!.textContent;
+    click('#add-food-btn');
+    const calls = vi.mocked(meals.log).mock.calls;
+    const logged = calls[calls.length - 1]?.[0].mealType;
+    click('#modal-close');
+    click('[data-tab="recipes"]');
+    await vi.advanceTimersByTimeAsync(0);
+    click('#tab-content .food-item');
+    const recipeButton = document.querySelector('#add-food-btn')!.textContent;
+    click('#modal-close');
+    click('[data-tab="quick"]');
+    const quickButton = document.querySelector('#quick-form button')!.textContent;
+    click('[data-tab="custom"]');
+    await vi.advanceTimersByTimeAsync(0);
+    click('#create-food-btn');
+    const createButton = document.querySelector('#create-food-form button[type="submit"]')!.textContent;
+    return { heading, foodButton, recipeButton, quickButton, createButton, logged };
+  }
+
+  const known = await shownMeal('breakfast');
+  expect(known).toEqual({
+    heading: 'Add to Breakfast',
+    foodButton: 'Add to Breakfast',
+    recipeButton: 'Add to Breakfast',
+    quickButton: 'Add to Breakfast',
+    createButton: 'Create & Add to Breakfast',
+    logged: 'breakfast',
+  });
+
+  const rejected = await shownMeal('</h1><img alt="injected">');
+  expect(document.querySelector('#app img')).toBeNull();
+  expect(rejected).toEqual({
+    heading: 'Add to Snack',
+    foodButton: 'Add to Snack',
+    recipeButton: 'Add to Snack',
+    quickButton: 'Add to Snack',
+    createButton: 'Create & Add to Snack',
+    logged: 'snack',
+  });
+
+  const missing = await shownMeal(null);
+  expect(missing.heading).toBe('Add to Snack');
+  expect(missing.foodButton).toBe('Add to Snack');
+  expect(missing.recipeButton).toBe('Add to Snack');
+  expect(missing.quickButton).toBe('Add to Snack');
+  expect(missing.createButton).toBe('Create & Add to Snack');
+  expect(missing.logged).toBe('snack');
+});
+
 it('Log Food shows an unmatched barcode as text', async () => {
   scanner.code = '0012345678905<img alt="unmatched-code">';
   vi.mocked(foods.barcode).mockRejectedValue(new Error('Product not found'));
