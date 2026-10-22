@@ -494,3 +494,26 @@ it('Log Food shows an unmatched barcode as text', async () => {
   expect(content.querySelector('img')).toBeNull();
   expect(content.textContent).toContain('No product found for barcode 0012345678905<img alt="unmatched-code">');
 });
+
+it('recipe ingredient list shows the name and unit as text', async () => {
+  const name = 'Apple<img alt="ingredient-name">';
+  const unit = 'cup<img alt="ingredient-unit">';
+  vi.mocked(recipes.get).mockResolvedValue({
+    recipe: {
+      id: 1, user_id: 1, name: 'Salad', total_servings: 1, serving_unit: 'serving',
+      manual_calories: null, manual_carbs_g: null, manual_protein_g: null, manual_fat_g: null,
+      ingredientCount: 1, perServing: { calories: 100, carbsG: 10, proteinG: 5, fatG: 4 },
+    },
+    ingredients: [{
+      id: 1, food_id: 1, servings: 1, qty: 1, unit_label: unit,
+      name, brand: null, serving_size: 100, serving_unit: 'g',
+      calories: 100, carbs_g: 10, protein_g: 5, fat_g: 4, measures: null,
+    }],
+  });
+  go('/existing');
+  await vi.advanceTimersByTimeAsync(0);
+  const list = document.querySelector('#ingredients-list')!;
+  expect(list.querySelector('img')).toBeNull();
+  expect(list.textContent).toContain(name);
+  expect(list.textContent).toContain(unit);
+});

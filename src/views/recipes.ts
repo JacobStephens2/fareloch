@@ -586,8 +586,8 @@ function renderIngredients(
     el.className = 'ingredient-row';
     el.innerHTML = `
       <div class="ingredient-info ingredient-clickable" data-idx="${idx}">
-        <span class="ingredient-name">${f.name}</span>
-        <span class="ingredient-unit">${unit}</span>
+        <span class="ingredient-name"></span>
+        <span class="ingredient-unit"></span>
       </div>
       <div class="ingredient-macros">
         <span class="macro-chip chip-calories">${Math.round(cal)}</span>
@@ -597,6 +597,8 @@ function renderIngredients(
       </div>
       <button type="button" class="btn-icon btn-remove-ing" data-idx="${idx}">&times;</button>
     `;
+    el.querySelector('.ingredient-name')!.appendChild(document.createTextNode(f.name));
+    el.querySelector('.ingredient-unit')!.appendChild(document.createTextNode(unit));
     container.appendChild(el);
   });
 
