@@ -316,6 +316,28 @@ it.each(['/other', '/missing'])('pending searches and tab loads cannot publish a
   expect(tabContent.innerHTML).toBe(previous);
 });
 
+it('Recent and My Foods tabs do not show a source label outside the food search session', async () => {
+  const recent = food('Recent apple');
+  recent.source = 'sample';
+  const custom = food('Custom apple');
+  custom.source = 'manual';
+  vi.mocked(foods.recent).mockResolvedValue({ foods: [recent] });
+  vi.mocked(foods.custom).mockResolvedValue({ foods: [custom] });
+  go('/log');
+  await vi.advanceTimersByTimeAsync(0);
+  expect(document.querySelector('#tab-content .food-source')!.textContent).toBe('sample');
+  click('[data-tab="recent"]');
+  await vi.advanceTimersByTimeAsync(0);
+  expect(document.querySelector('#tab-content .food-source')).toBeNull();
+  expect(document.querySelector('#tab-content')!.textContent).toContain('Recent apple');
+  expect(document.querySelector('#tab-content')!.textContent).not.toContain('sample');
+  click('[data-tab="custom"]');
+  await vi.advanceTimersByTimeAsync(0);
+  expect(document.querySelector('#tab-content .food-source')).toBeNull();
+  expect(document.querySelector('#tab-content')!.textContent).toContain('Custom apple');
+  expect(document.querySelector('#tab-content')!.textContent).not.toContain('manual');
+});
+
 it.each(['/log', '/recipe'])('%s shows search result name, brand, serving unit, and source label as text', async path => {
   const tag = (field: string) => `${field}<img alt="${field}">`;
   const saved = food(tag('saved-name'));

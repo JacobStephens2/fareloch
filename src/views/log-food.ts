@@ -2,7 +2,7 @@ import { foods as foodsApi, meals as mealsApi, recipes as recipesApi } from '../
 import { navigate, getQueryParams, setCleanup } from '../router';
 import { toLocalDateStr } from '../state';
 import { createFoodSearchSession, type FoodSearchResult } from '../food-search-session';
-import { savedMeasureSuffix, sourceLabel, textSpan } from './food-search-text';
+import { macroChips, measureCountSuffix, savedMeasureSuffix, sourceLabel, textSpan } from './food-search-text';
 import type { Food, ExternalFood, FoodMeasure, Recipe, MealType } from '../types';
 
 export function logFoodView() {
@@ -83,7 +83,7 @@ export function logFoodView() {
             if (snapshot.source === 'default') {
               if (snapshot.result.foods.length) {
                 content.innerHTML = '<h4 class="section-label">Recent</h4>';
-                renderFoodList(content, snapshot.result.foods, mealType, date);
+                renderFoodList(content, snapshot.result.foods, mealType, date, { showSourceLabel: true });
               } else {
                 content.innerHTML = '<p class="text-muted">Type to search for foods</p>';
               }
@@ -266,7 +266,7 @@ async function loadTab(content: HTMLElement, tab: string, mealType: MealType, da
         html += '<p class="text-muted">No custom foods yet</p>';
       }
       content.innerHTML = html;
-      if (foods.length > 0) renderFoodList(content, foods, mealType, date, true);
+      if (foods.length > 0) renderFoodList(content, foods, mealType, date, { append: true });
       document.getElementById('create-food-btn')!.addEventListener('click', () => showCreateFoodForm(mealType, date, () => {
         if (isCurrent()) void loadTab(content, tab, mealType, date, isCurrent);
       }));
@@ -308,7 +308,7 @@ function renderSearchResults(content: HTMLElement, { foods, external }: FoodSear
     html += '<h4 class="section-label">Saved Foods</h4>';
   }
   content.innerHTML = html;
-  if (foods.length > 0) renderFoodList(content, foods, mealType, date);
+  if (foods.length > 0) renderFoodList(content, foods, mealType, date, { showSourceLabel: true });
 
   if (external.length > 0) {
     const extHeader = document.createElement('h4');
@@ -343,27 +343,18 @@ async function lookupBarcode(code: string, mealType: MealType, date: string) {
   }
 }
 
-function macroChips(calories: number, carbs: number, protein: number, fat: number): HTMLDivElement {
-  const macros = document.createElement('div');
-  macros.className = 'food-item-macros';
-  macros.append(
-    textSpan('macro-chip chip-calories', String(Math.round(calories))),
-    textSpan('macro-chip chip-carbs', `${Math.round(carbs)}c`),
-    textSpan('macro-chip chip-protein', `${Math.round(protein)}p`),
-    textSpan('macro-chip chip-fat', `${Math.round(fat)}f`),
-  );
-  return macros;
-}
-
-function renderFoodList(container: HTMLElement, foods: Food[], mealType: MealType, date: string, append = false) {
+function renderFoodList(container: HTMLElement, foods: Food[], mealType: MealType, date: string, options: { append?: boolean; showSourceLabel?: boolean } = {}) {
+  const append = options.append ?? false;
+  const showSourceLabel = options.showSourceLabel ?? false;
   const list = document.createElement('div');
   list.className = 'food-list';
 
   for (const food of foods) {
     const info = document.createElement('div');
     info.className = 'food-item-info';
-    const serving = textSpan('food-serving', `${food.serving_size}${food.serving_unit}${savedMeasureSuffix(food.measures)} · `);
-    serving.appendChild(sourceLabel(food.source));
+    const servingText = `${food.serving_size}${food.serving_unit}${savedMeasureSuffix(food.measures)}`;
+    const serving = textSpan('food-serving', showSourceLabel ? `${servingText} · ` : servingText);
+    if (showSourceLabel) serving.appendChild(sourceLabel(food.source));
     info.append(
       textSpan('food-item-name', food.name),
       ...(food.brand ? [textSpan('food-brand', food.brand)] : []),
@@ -371,7 +362,7 @@ function renderFoodList(container: HTMLElement, foods: Food[], mealType: MealTyp
     );
     const item = document.createElement('div');
     item.className = 'food-item';
-    item.append(info, macroChips(food.calories, food.carbs_g, food.protein_g, food.fat_g));
+    item.append(info, macroChips({ calories: food.calories, carbs: food.carbs_g, protein: food.protein_g, fat: food.fat_g }));
     item.addEventListener('click', () => showAddModal(food, mealType, date));
     list.appendChild(item);
   }
@@ -389,7 +380,7 @@ function renderExternalList(container: HTMLElement, items: ExternalFood[], mealT
   list.className = 'food-list';
 
   for (const item of items) {
-    const serving = textSpan('food-serving', `${item.servingSize}${item.servingUnit}${item.measures?.length ? ` · ${item.measures.length + 1} units` : ''} · `);
+    const serving = textSpan('food-serving', `${item.servingSize}${item.servingUnit}${measureCountSuffix(item.measures?.length ?? 0)} · `);
     serving.appendChild(sourceLabel(item.source));
     const info = document.createElement('div');
     info.className = 'food-item-info';
@@ -400,7 +391,7 @@ function renderExternalList(container: HTMLElement, items: ExternalFood[], mealT
     );
     const el = document.createElement('div');
     el.className = 'food-item';
-    el.append(info, macroChips(item.calories, item.carbsG, item.proteinG, item.fatG));
+    el.append(info, macroChips({ calories: item.calories, carbs: item.carbsG, protein: item.proteinG, fat: item.fatG }));
     el.addEventListener('click', async () => {
       try {
         const { food } = await foodsApi.saveExternal(item);

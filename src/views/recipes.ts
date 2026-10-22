@@ -1,19 +1,8 @@
 import { recipes as recipesApi, foods as foodsApi } from '../api';
 import { navigate, setCleanup } from '../router';
 import { createFoodSearchSession, type FoodSearchResult } from '../food-search-session';
-import { savedMeasureSuffix, sourceLabel, textSpan } from './food-search-text';
+import { macroChips, measureCountSuffix, savedMeasureSuffix, sourceLabel, textSpan } from './food-search-text';
 import type { Food, FoodMeasure, RecipeIngredient } from '../types';
-
-function macroChips(carbs: number, protein: number, fat: number): HTMLDivElement {
-  const macros = document.createElement('div');
-  macros.className = 'food-item-macros';
-  macros.append(
-    textSpan('macro-chip chip-carbs', `${Math.round(carbs)}c`),
-    textSpan('macro-chip chip-protein', `${Math.round(protein)}p`),
-    textSpan('macro-chip chip-fat', `${Math.round(fat)}f`),
-  );
-  return macros;
-}
 
 export function recipesView() {
   return {
@@ -384,7 +373,7 @@ export function recipeEditView(params: Record<string, string>) {
             textSpan('food-item-name', `${food.name}${food.brand ? ` (${food.brand})` : ''}`),
             serving,
           );
-          item.append(info, macroChips(food.carbs_g, food.protein_g, food.fat_g));
+          item.append(info, macroChips({ carbs: food.carbs_g, protein: food.protein_g, fat: food.fat_g }));
           item.addEventListener('click', () => {
             showIngredientModal(food);
           });
@@ -392,7 +381,7 @@ export function recipeEditView(params: Record<string, string>) {
         }
 
         for (const ext of external) {
-          const serving = textSpan('food-serving', `${ext.servingSize}${ext.servingUnit}${ext.measures?.length ? ` · ${ext.measures.length + 1} units` : ''} · `);
+          const serving = textSpan('food-serving', `${ext.servingSize}${ext.servingUnit}${measureCountSuffix(ext.measures?.length ?? 0)} · `);
           serving.append(sourceLabel(ext.source), document.createTextNode(` · ${Math.round(ext.calories)} kcal`));
           const info = document.createElement('div');
           info.className = 'food-item-info';
@@ -402,7 +391,7 @@ export function recipeEditView(params: Record<string, string>) {
           );
           const item = document.createElement('div');
           item.className = 'food-item food-item-sm';
-          item.append(info, macroChips(ext.carbsG, ext.proteinG, ext.fatG));
+          item.append(info, macroChips({ carbs: ext.carbsG, protein: ext.proteinG, fat: ext.fatG }));
           item.addEventListener('click', async () => {
             try {
               const { food } = await foodsApi.saveExternal(ext);
