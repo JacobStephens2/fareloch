@@ -6,7 +6,7 @@ import { once } from 'node:events';
 import express from 'express';
 import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import { signToken } from '../middleware/auth.js';
-import { getDb } from '../db.js';
+import { getDb, initDb } from '../db.js';
 import foodRoutes from './foods.js';
 
 process.env.JWT_SECRET = 'test-secret';
@@ -33,7 +33,7 @@ let port: number;
 
 beforeAll(async () => {
   const dir = mkdtempSync(join(tmpdir(), 'fareloch-foods-'));
-  getDb(join(dir, 'macros.db'));
+  initDb(join(dir, 'macros.db'));
   const app = express();
   app.use(express.json());
   app.use('/api/foods', foodRoutes);
