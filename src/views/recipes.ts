@@ -584,11 +584,12 @@ function renderIngredients(
 
     const el = document.createElement('div');
     el.className = 'ingredient-row';
-    el.innerHTML = `
-      <div class="ingredient-info ingredient-clickable" data-idx="${idx}">
-        <span class="ingredient-name"></span>
-        <span class="ingredient-unit"></span>
-      </div>
+    const info = document.createElement('div');
+    info.className = 'ingredient-info ingredient-clickable';
+    info.dataset.idx = String(idx);
+    info.append(textSpan('ingredient-name', f.name), textSpan('ingredient-unit', unit));
+    el.appendChild(info);
+    el.insertAdjacentHTML('beforeend', `
       <div class="ingredient-macros">
         <span class="macro-chip chip-calories">${Math.round(cal)}</span>
         <span class="macro-chip chip-carbs">${Math.round(c)}c</span>
@@ -596,9 +597,7 @@ function renderIngredients(
         <span class="macro-chip chip-fat">${Math.round(fat)}f</span>
       </div>
       <button type="button" class="btn-icon btn-remove-ing" data-idx="${idx}">&times;</button>
-    `;
-    el.querySelector('.ingredient-name')!.appendChild(document.createTextNode(f.name));
-    el.querySelector('.ingredient-unit')!.appendChild(document.createTextNode(unit));
+    `);
     container.appendChild(el);
   });
 
