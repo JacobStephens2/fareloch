@@ -1,10 +1,28 @@
 import { Router, Request, Response } from 'express';
 import { getDb } from '../db.js';
+import { acceptedFoodId, foodVisibleToCaller } from '../food-owner.js';
+import type Database from 'better-sqlite3';
 import { requireAuth } from '../middleware/auth.js';
 import { recipePerServing, roundMacros } from '../nutrition.js';
 import { recipeIngredientRows } from '../recipe-ingredients.js';
 
 const router = Router();
+
+function insertLinkedIngredients(
+  db: Database.Database,
+  recipeId: number | bigint,
+  ingredients: { foodId: unknown; servings?: number; qty?: number | null; unitLabel?: string | null }[],
+  userId: number,
+) {
+  const insert = db.prepare(
+    'INSERT INTO recipe_ingredients (recipe_id, food_id, servings, qty, unit_label) VALUES (?, ?, ?, ?, ?)'
+  );
+  for (const ing of ingredients) {
+    const foodId = acceptedFoodId(db, ing.foodId, userId);
+    if (foodId == null) continue;
+    insert.run(recipeId, foodId, ing.servings || 1, ing.qty ?? null, ing.unitLabel ?? null);
+  }
+}
 
 // Get all recipes for user
 router.get('/', requireAuth, (req: Request, res: Response) => {
@@ -13,7 +31,7 @@ router.get('/', requireAuth, (req: Request, res: Response) => {
 
   // Attach computed nutrition for each recipe
   const withNutrition = recipes.map((r) => {
-    const ingredients = recipeIngredientRows(db, r);
+    const ingredients = recipeIngredientRows(db, r, req.user!.userId);
 
     return {
       ...r,
@@ -42,9 +60,9 @@ router.get('/:id', requireAuth, (req: Request, res: Response) => {
            f.name, f.brand, f.serving_size, f.serving_unit,
            f.calories, f.carbs_g, f.protein_g, f.fat_g, f.measures
     FROM recipe_ingredients ri
-    JOIN foods f ON ri.food_id = f.id
+    JOIN foods f ON ri.food_id = f.id AND ${foodVisibleToCaller('f')}
     WHERE ri.recipe_id = ?
-  `).all(recipe.id);
+  `).all(req.user!.userId, recipe.id);
 
   res.json({ recipe, ingredients });
 });
@@ -68,10 +86,7 @@ router.post('/', requireAuth, (req: Request, res: Response) => {
     const recipeId = result.lastInsertRowid;
 
     if (ingredients && Array.isArray(ingredients)) {
-      const insert = db.prepare('INSERT INTO recipe_ingredients (recipe_id, food_id, servings, qty, unit_label) VALUES (?, ?, ?, ?, ?)');
-      for (const ing of ingredients) {
-        insert.run(recipeId, ing.foodId, ing.servings || 1, ing.qty ?? null, ing.unitLabel ?? null);
-      }
+      insertLinkedIngredients(db, recipeId, ingredients, req.user!.userId);
     }
 
     res.json({ recipe: { id: recipeId, name, totalServings: totalServings || 1 } });
@@ -106,13 +121,10 @@ router.put('/:id', requireAuth, (req: Request, res: Response) => {
            manualCalories ?? null, manualCarbsG ?? null, manualProteinG ?? null, manualFatG ?? null,
            req.params.id);
 
-    // Replace ingredients if provided
+    // Replace ingredients if provided. Another caller's food is not linked.
     if (ingredients && Array.isArray(ingredients)) {
       db.prepare('DELETE FROM recipe_ingredients WHERE recipe_id = ?').run(req.params.id);
-      const insert = db.prepare('INSERT INTO recipe_ingredients (recipe_id, food_id, servings, qty, unit_label) VALUES (?, ?, ?, ?, ?)');
-      for (const ing of ingredients) {
-        insert.run(req.params.id, ing.foodId, ing.servings || 1, ing.qty ?? null, ing.unitLabel ?? null);
-      }
+      insertLinkedIngredients(db, Number(req.params.id), ingredients, req.user!.userId);
     }
 
     res.json({ success: true });
@@ -141,10 +153,17 @@ router.post('/:id/copy', requireAuth, (req: Request, res: Response) => {
     const newId = result.lastInsertRowid;
 
     const ingredients = db.prepare('SELECT * FROM recipe_ingredients WHERE recipe_id = ?').all(recipe.id) as any[];
-    const insert = db.prepare('INSERT INTO recipe_ingredients (recipe_id, food_id, servings, qty, unit_label) VALUES (?, ?, ?, ?, ?)');
-    for (const ing of ingredients) {
-      insert.run(newId, ing.food_id, ing.servings, ing.qty, ing.unit_label);
-    }
+    insertLinkedIngredients(
+      db,
+      newId,
+      ingredients.map((ing) => ({
+        foodId: ing.food_id,
+        servings: ing.servings,
+        qty: ing.qty,
+        unitLabel: ing.unit_label,
+      })),
+      req.user!.userId,
+    );
 
     res.json({ recipe: { id: newId } });
   } catch (e) {
