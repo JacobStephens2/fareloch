@@ -4,6 +4,7 @@ import { toLocalDateStr } from '../state';
 import { createFoodSearchSession, type FoodSearchResult } from '../food-search-session';
 import { assignFoodDetailText, assignPerUnitMacros, assignSavedMeasureOptions, assignTotalMacros, macroChips, measureCountSuffix, savedMeasureSuffix, sourceLabel, textSpan } from './food-search-text';
 import type { Food, ExternalFood, FoodMeasure, Recipe, MealType } from '../types';
+import { scaleMacros, roundMacros, unitScale, caloriesFromMacros } from '../../server/src/nutrition';
 
 export function logFoodView() {
   const params = getQueryParams();
@@ -496,8 +497,8 @@ function showAddModal(food: Food, mealType: MealType, date: string) {
   assignPerUnitMacros(perUnit, food);
   assignTotalMacros(total, food);
 
-  // Selected measure's gram weight divided by the saved serving size.
-  let unitScale = 1;
+  // Named scale so it does not shadow the Nutrition unitScale function.
+  let scale = 1;
 
   const servingsInput = document.getElementById('servings-input') as HTMLInputElement;
   const unitSelect = document.getElementById('unit-select') as HTMLSelectElement | null;
@@ -505,22 +506,22 @@ function showAddModal(food: Food, mealType: MealType, date: string) {
 
   const updateTotal = () => {
     const qty = parseFloat(servingsInput.value) || 1;
-    assignTotalMacros(total, food, unitScale * qty, 'rounded');
+    assignTotalMacros(total, food, scale * qty, 'rounded');
   };
 
   const updatePerUnit = () => {
-    assignPerUnitMacros(perUnit, food, unitScale, 'rounded');
+    assignPerUnitMacros(perUnit, food, scale, 'rounded');
   };
 
   if (unitSelect) {
     unitSelect.addEventListener('change', () => {
       const val = unitSelect.value;
       if (val === 'default') {
-        unitScale = 1;
+        scale = 1;
         document.getElementById('modal-per-label')!.textContent = `Per ${food.serving_size}${food.serving_unit}`;
       } else {
         const m = measures[parseInt(val)];
-        unitScale = m.gramWeight / food.serving_size;
+        scale = unitScale(m.gramWeight, food.serving_size);
         document.getElementById('modal-per-label')!.textContent = `Per ${m.label} (${m.gramWeight}g)`;
       }
       updatePerUnit();
@@ -540,7 +541,7 @@ function showAddModal(food: Food, mealType: MealType, date: string) {
 
   document.getElementById('add-food-btn')!.addEventListener('click', async () => {
     const qty = parseFloat(servingsInput.value) || 1;
-    const effectiveServings = qty * unitScale;
+    const effectiveServings = qty * scale;
     const btn = document.getElementById('add-food-btn') as HTMLButtonElement;
     btn.disabled = true;
     btn.textContent = 'Adding...';
@@ -551,7 +552,7 @@ function showAddModal(food: Food, mealType: MealType, date: string) {
     if (unitSelect && unitSelect.value !== 'default') {
       const m = measures[parseInt(unitSelect.value)];
       unitLabel = m.label;
-      savedUnitScale = unitScale;
+      savedUnitScale = scale;
     }
 
     try {
@@ -571,14 +572,14 @@ function showRecipeAddModal(recipe: Recipe, mealType: MealType, date: string) {
   const modal = document.getElementById('food-detail-modal')!;
   document.getElementById('modal-food-name')!.textContent = recipe.name;
 
-  const ps = recipe.perServing;
+  const perServing = recipe.perServing;
   const body = document.getElementById('modal-body')!;
   body.innerHTML = `
     <div class="modal-macros">
-      <div class="modal-macro"><strong>${ps.calories}</strong> kcal</div>
-      <div class="modal-macro"><strong>${ps.carbsG}g</strong> carbs</div>
-      <div class="modal-macro"><strong>${ps.proteinG}g</strong> protein</div>
-      <div class="modal-macro"><strong>${ps.fatG}g</strong> fat</div>
+      <div class="modal-macro"><strong>${perServing.calories}</strong> kcal</div>
+      <div class="modal-macro"><strong>${perServing.carbsG}g</strong> carbs</div>
+      <div class="modal-macro"><strong>${perServing.proteinG}g</strong> protein</div>
+      <div class="modal-macro"><strong>${perServing.fatG}g</strong> fat</div>
     </div>
     <p class="text-muted">Per ${recipe.serving_unit || 'serving'} (${recipe.total_servings} total)</p>
     <div class="form-group">
@@ -590,10 +591,10 @@ function showRecipeAddModal(recipe: Recipe, mealType: MealType, date: string) {
       </div>
     </div>
     <div class="modal-total" id="modal-total">
-      <span>${ps.calories} kcal</span>
-      <span>${ps.carbsG}g C</span>
-      <span>${ps.proteinG}g P</span>
-      <span>${ps.fatG}g F</span>
+      <span>${perServing.calories} kcal</span>
+      <span>${perServing.carbsG}g C</span>
+      <span>${perServing.proteinG}g P</span>
+      <span>${perServing.fatG}g F</span>
     </div>
     <button id="add-food-btn" class="btn btn-primary btn-block">Add to ${capitalize(mealType)}</button>
   `;
@@ -601,11 +602,13 @@ function showRecipeAddModal(recipe: Recipe, mealType: MealType, date: string) {
   const servingsInput = document.getElementById('servings-input') as HTMLInputElement;
   const updateTotal = () => {
     const s = parseFloat(servingsInput.value) || 1;
+    // Multiplies the display-rounded perServing the API sends (see #2)
+    const total = roundMacros(scaleMacros(perServing, s), 'display');
     document.getElementById('modal-total')!.innerHTML = `
-      <span>${Math.round(ps.calories * s)} kcal</span>
-      <span>${Math.round(ps.carbsG * s * 10) / 10}g C</span>
-      <span>${Math.round(ps.proteinG * s * 10) / 10}g P</span>
-      <span>${Math.round(ps.fatG * s * 10) / 10}g F</span>
+      <span>${total.calories} kcal</span>
+      <span>${total.carbsG}g C</span>
+      <span>${total.proteinG}g P</span>
+      <span>${total.fatG}g F</span>
     `;
   };
 
@@ -678,7 +681,7 @@ function showQuickAddForm(container: HTMLElement, mealType: MealType, date: stri
     const c = parseFloat((document.getElementById('quick-carbs') as HTMLInputElement).value) || 0;
     const p = parseFloat((document.getElementById('quick-protein') as HTMLInputElement).value) || 0;
     const f = parseFloat((document.getElementById('quick-fat') as HTMLInputElement).value) || 0;
-    qCalInput.value = String(Math.round(c * 4 + p * 4 + f * 9));
+    qCalInput.value = String(caloriesFromMacros(c, p, f));
   };
   ['quick-carbs', 'quick-protein', 'quick-fat'].forEach(id =>
     document.getElementById(id)!.addEventListener('input', autoCalcQ)
@@ -761,7 +764,7 @@ function showCreateFoodForm(mealType: MealType, date: string, onCancel: () => vo
     const c = parseFloat((document.getElementById('cf-carbs') as HTMLInputElement).value) || 0;
     const p = parseFloat((document.getElementById('cf-protein') as HTMLInputElement).value) || 0;
     const f = parseFloat((document.getElementById('cf-fat') as HTMLInputElement).value) || 0;
-    cfCalInput.value = String(Math.round(c * 4 + p * 4 + f * 9));
+    cfCalInput.value = String(caloriesFromMacros(c, p, f));
   };
   ['cf-carbs', 'cf-protein', 'cf-fat'].forEach(id =>
     document.getElementById(id)!.addEventListener('input', autoCalcCf)

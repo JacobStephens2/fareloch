@@ -1,6 +1,8 @@
 import { Router, Request, Response } from 'express';
 import { getDb } from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
+import { recipePerServing, roundMacros } from '../nutrition.js';
+import { recipeIngredientRows } from '../recipe-ingredients.js';
 
 const router = Router();
 
@@ -11,46 +13,15 @@ router.get('/', requireAuth, (req: Request, res: Response) => {
 
   // Attach computed nutrition for each recipe
   const withNutrition = recipes.map((r) => {
-    // If manual macros are set, use those (per total recipe)
-    if (r.manual_calories != null) {
-      const perServing = r.total_servings || 1;
-      return {
-        ...r,
-        ingredientCount: 0,
-        perServing: {
-          calories: Math.round(r.manual_calories / perServing),
-          carbsG: Math.round((r.manual_carbs_g || 0) / perServing * 10) / 10,
-          proteinG: Math.round((r.manual_protein_g || 0) / perServing * 10) / 10,
-          fatG: Math.round((r.manual_fat_g || 0) / perServing * 10) / 10,
-        },
-      };
-    }
+    const ingredients = recipeIngredientRows(db, r);
 
-    const ingredients = db.prepare(`
-      SELECT ri.servings, f.name, f.calories, f.carbs_g, f.protein_g, f.fat_g, f.serving_unit
-      FROM recipe_ingredients ri
-      JOIN foods f ON ri.food_id = f.id
-      WHERE ri.recipe_id = ?
-    `).all(r.id) as any[];
-
-    let totalCalories = 0, totalCarbs = 0, totalProtein = 0, totalFat = 0;
-    for (const ing of ingredients) {
-      totalCalories += ing.calories * ing.servings;
-      totalCarbs += ing.carbs_g * ing.servings;
-      totalProtein += ing.protein_g * ing.servings;
-      totalFat += ing.fat_g * ing.servings;
-    }
-
-    const perServing = r.total_servings || 1;
     return {
       ...r,
       ingredientCount: ingredients.length,
-      perServing: {
-        calories: Math.round(totalCalories / perServing),
-        carbsG: Math.round((totalCarbs / perServing) * 10) / 10,
-        proteinG: Math.round((totalProtein / perServing) * 10) / 10,
-        fatG: Math.round((totalFat / perServing) * 10) / 10,
-      },
+      perServing: roundMacros(
+        recipePerServing(r, ingredients),
+        'display',
+      ),
     };
   });
 

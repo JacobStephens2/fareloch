@@ -1,3 +1,5 @@
+import { macrosOf, roundMacros, scaleMacros } from '../../server/src/nutrition';
+
 const SOURCE_LABELS: Record<string, string> = {
   fatsecret: 'FatSecret',
   usda: 'USDA',
@@ -35,22 +37,38 @@ type SavedFoodMacros = {
 };
 
 type MacroRounding = 'exact' | 'rounded';
+type MacroField = 'calories' | 'carbs_g' | 'protein_g' | 'fat_g';
 
-// Non-finite saved amounts stay text; only finite numbers are scaled.
-function macroText(value: number, scale: number, rounding: MacroRounding, place: 'kcal' | 'gram'): string {
+// Non-finite saved amounts stay text. Finite 'rounded' amounts use the Nutrition module's display rounding.
+function macroText(value: number, scale: number, rounding: MacroRounding, field: MacroField): string {
   const numeric = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(numeric)) return String(value);
   if (rounding === 'exact') return String(value);
-  const scaled = numeric * scale;
-  return place === 'kcal' ? String(Math.round(scaled)) : String(Math.round(scaled * 10) / 10);
+  const rounded = roundMacros(
+    scaleMacros(
+      macrosOf({
+        calories: field === 'calories' ? numeric : 0,
+        carbs_g: field === 'carbs_g' ? numeric : 0,
+        protein_g: field === 'protein_g' ? numeric : 0,
+        fat_g: field === 'fat_g' ? numeric : 0,
+      }),
+      scale,
+    ),
+    'display',
+  );
+  const amount = field === 'calories' ? rounded.calories
+    : field === 'carbs_g' ? rounded.carbsG
+    : field === 'protein_g' ? rounded.proteinG
+    : rounded.fatG;
+  return String(amount);
 }
 
 function macroFigures(food: SavedFoodMacros, scale: number, rounding: MacroRounding) {
   return {
-    calories: macroText(food.calories, scale, rounding, 'kcal'),
-    carbs: macroText(food.carbs_g, scale, rounding, 'gram'),
-    protein: macroText(food.protein_g, scale, rounding, 'gram'),
-    fat: macroText(food.fat_g, scale, rounding, 'gram'),
+    calories: macroText(food.calories, scale, rounding, 'calories'),
+    carbs: macroText(food.carbs_g, scale, rounding, 'carbs_g'),
+    protein: macroText(food.protein_g, scale, rounding, 'protein_g'),
+    fat: macroText(food.fat_g, scale, rounding, 'fat_g'),
   };
 }
 
