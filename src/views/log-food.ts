@@ -470,7 +470,7 @@ function showAddModal(food: Food, mealType: MealType, date: string) {
     ? `<div class="form-group">
         <label for="unit-select">Unit</label>
         <select id="unit-select">
-          <option value="default">${food.serving_size}${food.serving_unit} (default)</option>
+          <option value="default"></option>
           ${measures.map((m, i) => `<option value="${i}">${m.label} (${m.gramWeight}g)</option>`).join('')}
         </select>
       </div>`
@@ -478,14 +478,14 @@ function showAddModal(food: Food, mealType: MealType, date: string) {
 
   const body = document.getElementById('modal-body')!;
   body.innerHTML = `
-    ${food.brand ? `<p class="food-brand">${food.brand}</p>` : ''}
+    ${food.brand ? '<p class="food-brand"></p>' : ''}
     <div class="modal-macros" id="modal-per-unit">
       <div class="modal-macro"><strong>${baseCal}</strong> kcal</div>
       <div class="modal-macro"><strong>${baseC}g</strong> carbs</div>
       <div class="modal-macro"><strong>${baseP}g</strong> protein</div>
       <div class="modal-macro"><strong>${baseF}g</strong> fat</div>
     </div>
-    <p class="text-muted" id="modal-per-label">Per ${food.serving_size}${food.serving_unit}</p>
+    <p class="text-muted" id="modal-per-label"></p>
     ${measureOptions}
     <div class="form-group">
       <label for="servings-input">Quantity</label>
@@ -503,6 +503,9 @@ function showAddModal(food: Food, mealType: MealType, date: string) {
     </div>
     <button id="add-food-btn" class="btn btn-primary btn-block">Add to ${capitalize(mealType)}</button>
   `;
+  if (food.brand) body.querySelector('.food-brand')!.appendChild(document.createTextNode(food.brand));
+  document.getElementById('modal-per-label')!.appendChild(document.createTextNode(`Per ${food.serving_size}${food.serving_unit}`));
+  document.querySelector('#unit-select option[value="default"]')?.appendChild(document.createTextNode(`${food.serving_size}${food.serving_unit} (default)`));
 
   let unitScale = 1; // multiplier for selected unit vs default serving
 

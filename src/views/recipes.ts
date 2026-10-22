@@ -183,18 +183,18 @@ export function recipeEditView(params: Record<string, string>) {
         const baseF = food.fat_g;
 
         body.innerHTML = `
-          ${food.brand ? `<p class="food-brand">${food.brand}</p>` : ''}
+          ${food.brand ? '<p class="food-brand"></p>' : ''}
           <div class="modal-macros" id="ing-modal-per-unit">
             <div class="modal-macro"><strong>${baseCal}</strong> kcal</div>
             <div class="modal-macro"><strong>${baseC}g</strong> carbs</div>
             <div class="modal-macro"><strong>${baseP}g</strong> protein</div>
             <div class="modal-macro"><strong>${baseF}g</strong> fat</div>
           </div>
-          <p class="text-muted" id="ing-modal-per-label">Per ${food.serving_size}${food.serving_unit}</p>
+          <p class="text-muted" id="ing-modal-per-label"></p>
           ${hasMeasures ? `<div class="form-group">
             <label for="ing-unit-select">Unit</label>
             <select id="ing-unit-select">
-              <option value="default">${food.serving_size}${food.serving_unit} (default)</option>
+              <option value="default"></option>
               ${measures.map((m, i) => `<option value="${i}">${m.label} (${m.gramWeight}g)</option>`).join('')}
             </select>
           </div>` : ''}
@@ -212,6 +212,9 @@ export function recipeEditView(params: Record<string, string>) {
             ${isEdit ? '<button type="button" id="ing-remove-btn" class="btn btn-danger" style="flex:0 0 auto">Remove</button>' : ''}
           </div>
         `;
+        if (food.brand) body.querySelector('.food-brand')!.appendChild(document.createTextNode(food.brand));
+        document.getElementById('ing-modal-per-label')!.appendChild(document.createTextNode(`Per ${food.serving_size}${food.serving_unit}`));
+        document.querySelector('#ing-unit-select option[value="default"]')?.appendChild(document.createTextNode(`${food.serving_size}${food.serving_unit} (default)`));
 
         let unitScale = 1;
         // When editing, recover the unit scale from stored servings and qty
