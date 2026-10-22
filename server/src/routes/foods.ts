@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { getDb } from '../db.js';
+import { foodVisibleToCaller } from '../food-owner.js';
 import { requireAuth, optionalAuth } from '../middleware/auth.js';
 
 const router = Router();
@@ -72,7 +73,7 @@ router.get('/search', optionalAuth, async (req: Request, res: Response) => {
     if (req.user) {
       local = db.prepare(`
         SELECT * FROM foods
-        WHERE (user_id = ? OR user_id IS NULL)
+        WHERE ${foodVisibleToCaller()}
           AND (name LIKE ? OR brand LIKE ?)
         ORDER BY
           CASE WHEN user_id = ? THEN 0 ELSE 1 END,
@@ -194,10 +195,10 @@ router.get('/recent', requireAuth, (req: Request, res: Response) => {
   const foods = db.prepare(`
     SELECT DISTINCT f.* FROM foods f
     JOIN meal_logs m ON (m.food_id = f.id)
-    WHERE m.user_id = ?
+    WHERE m.user_id = ? AND ${foodVisibleToCaller('f')}
     ORDER BY m.created_at DESC
     LIMIT 20
-  `).all(req.user!.userId);
+  `).all(req.user!.userId, req.user!.userId);
   res.json({ foods });
 });
 

@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { getDb } from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
+import { foodVisibleToCaller } from '../food-owner.js';
 import { Macros, macrosOf, scaleMacros, recipePerServing, roundMacros } from '../nutrition.js';
 import { recipeIngredientRows } from '../recipe-ingredients.js';
 
@@ -13,7 +14,7 @@ router.get('/:date', requireAuth, (req: Request, res: Response) => {
     SELECT m.*, f.name as food_name, f.brand as food_brand, f.serving_size, f.serving_unit,
            r.name as recipe_name
     FROM meal_logs m
-    LEFT JOIN foods f ON m.food_id = f.id
+    LEFT JOIN foods f ON m.food_id = f.id AND ${foodVisibleToCaller('f')}
     LEFT JOIN recipes r ON m.recipe_id = r.id
     WHERE m.user_id = ? AND m.date = ?
     ORDER BY
@@ -24,7 +25,7 @@ router.get('/:date', requireAuth, (req: Request, res: Response) => {
         WHEN 'snack' THEN 4
       END,
       m.created_at
-  `).all(req.user!.userId, req.params.date);
+  `).all(req.user!.userId, req.user!.userId, req.params.date);
   res.json({ meals });
 });
 
@@ -63,9 +64,11 @@ router.post('/', requireAuth, (req: Request, res: Response) => {
     const finalServings = servings || 1;
     let finalMacros: Macros = { calories: calories || 0, carbsG: carbsG || 0, proteinG: proteinG || 0, fatG: fatG || 0 };
 
-    // Calculate from food
+    // Calculate from food the caller owns, or from a food with no owner.
     if (foodId) {
-      const food = db.prepare('SELECT * FROM foods WHERE id = ?').get(foodId) as any;
+      const food = db.prepare(
+        `SELECT * FROM foods WHERE id = ? AND ${foodVisibleToCaller()}`
+      ).get(foodId, req.user!.userId) as any;
       if (food) {
         finalMacros = scaleMacros(macrosOf(food), finalServings);
       }
@@ -75,7 +78,7 @@ router.post('/', requireAuth, (req: Request, res: Response) => {
     if (recipeId) {
       const recipe = db.prepare('SELECT * FROM recipes WHERE id = ? AND user_id = ?').get(recipeId, req.user!.userId) as any;
       if (recipe) {
-        const perServing = recipePerServing(recipe, recipeIngredientRows(db, recipe));
+        const perServing = recipePerServing(recipe, recipeIngredientRows(db, recipe, req.user!.userId));
         finalMacros = scaleMacros(perServing, finalServings);
       }
     }
@@ -98,10 +101,10 @@ router.post('/', requireAuth, (req: Request, res: Response) => {
       SELECT m.*, f.name as food_name, f.brand as food_brand, f.serving_size, f.serving_unit,
              r.name as recipe_name
       FROM meal_logs m
-      LEFT JOIN foods f ON m.food_id = f.id
+      LEFT JOIN foods f ON m.food_id = f.id AND ${foodVisibleToCaller('f')}
       LEFT JOIN recipes r ON m.recipe_id = r.id
       WHERE m.id = ?
-    `).get(result.lastInsertRowid);
+    `).get(req.user!.userId, result.lastInsertRowid);
 
     res.json({ meal });
   } catch (e) {
@@ -137,10 +140,10 @@ router.put('/:id', requireAuth, (req: Request, res: Response) => {
       SELECT m.*, f.name as food_name, f.brand as food_brand, f.serving_size, f.serving_unit,
              r.name as recipe_name
       FROM meal_logs m
-      LEFT JOIN foods f ON m.food_id = f.id
+      LEFT JOIN foods f ON m.food_id = f.id AND ${foodVisibleToCaller('f')}
       LEFT JOIN recipes r ON m.recipe_id = r.id
       WHERE m.id = ?
-    `).get(req.params.id);
+    `).get(req.user!.userId, req.params.id);
 
     res.json({ meal });
   } catch (e) {
@@ -190,11 +193,11 @@ router.get('/export/csv', requireAuth, (req: Request, res: Response) => {
     SELECT m.date, m.meal_type, m.servings, m.calories, m.carbs_g, m.protein_g, m.fat_g, m.note,
            f.name as food_name, f.brand as food_brand, r.name as recipe_name
     FROM meal_logs m
-    LEFT JOIN foods f ON m.food_id = f.id
+    LEFT JOIN foods f ON m.food_id = f.id AND ${foodVisibleToCaller('f')}
     LEFT JOIN recipes r ON m.recipe_id = r.id
     WHERE m.user_id = ?
     ORDER BY m.date DESC, m.meal_type
-  `).all(req.user!.userId) as any[];
+  `).all(req.user!.userId, req.user!.userId) as any[];
 
   const header = 'Date,Meal,Food,Brand,Servings,Calories,Carbs(g),Protein(g),Fat(g),Note';
   const rows = meals.map((m: any) => {

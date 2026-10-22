@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { getDb } from '../db.js';
+import { foodVisibleToCaller } from '../food-owner.js';
 import { requireAuth } from '../middleware/auth.js';
 import { recipePerServing, roundMacros } from '../nutrition.js';
 import { recipeIngredientRows } from '../recipe-ingredients.js';
@@ -13,7 +14,7 @@ router.get('/', requireAuth, (req: Request, res: Response) => {
 
   // Attach computed nutrition for each recipe
   const withNutrition = recipes.map((r) => {
-    const ingredients = recipeIngredientRows(db, r);
+    const ingredients = recipeIngredientRows(db, r, req.user!.userId);
 
     return {
       ...r,
@@ -42,9 +43,9 @@ router.get('/:id', requireAuth, (req: Request, res: Response) => {
            f.name, f.brand, f.serving_size, f.serving_unit,
            f.calories, f.carbs_g, f.protein_g, f.fat_g, f.measures
     FROM recipe_ingredients ri
-    JOIN foods f ON ri.food_id = f.id
+    JOIN foods f ON ri.food_id = f.id AND ${foodVisibleToCaller('f')}
     WHERE ri.recipe_id = ?
-  `).all(recipe.id);
+  `).all(req.user!.userId, recipe.id);
 
   res.json({ recipe, ingredients });
 });
