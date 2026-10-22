@@ -1,7 +1,7 @@
 import { recipes as recipesApi, foods as foodsApi } from '../api';
 import { navigate, setCleanup } from '../router';
 import { createFoodSearchSession, type FoodSearchResult } from '../food-search-session';
-import { assignFoodDetailText, assignSavedMeasureOptions, macroChips, measureCountSuffix, savedMeasureSuffix, sourceLabel, textSpan } from './food-search-text';
+import { assignFoodDetailText, assignPerUnitMacros, assignSavedMeasureOptions, assignTotalMacros, macroChips, measureCountSuffix, savedMeasureSuffix, sourceLabel, textSpan } from './food-search-text';
 import type { Food, FoodMeasure, RecipeIngredient } from '../types';
 
 export function recipesView() {
@@ -177,19 +177,9 @@ export function recipeEditView(params: Record<string, string>) {
         try { measures = food.measures ? JSON.parse(food.measures) : []; } catch { /* */ }
         const hasMeasures = measures.length > 0;
 
-        const baseCal = food.calories;
-        const baseC = food.carbs_g;
-        const baseP = food.protein_g;
-        const baseF = food.fat_g;
-
         body.innerHTML = `
           ${food.brand ? '<p class="food-brand"></p>' : ''}
-          <div class="modal-macros" id="ing-modal-per-unit">
-            <div class="modal-macro"><strong>${baseCal}</strong> kcal</div>
-            <div class="modal-macro"><strong>${baseC}g</strong> carbs</div>
-            <div class="modal-macro"><strong>${baseP}g</strong> protein</div>
-            <div class="modal-macro"><strong>${baseF}g</strong> fat</div>
-          </div>
+          <div class="modal-macros" id="ing-modal-per-unit"></div>
           <p class="text-muted" id="ing-modal-per-label"></p>
           ${hasMeasures ? `<div class="form-group">
             <label for="ing-unit-select">Unit</label>
@@ -217,6 +207,9 @@ export function recipeEditView(params: Record<string, string>) {
           document.getElementById('ing-modal-per-label')!,
           document.querySelector('#ing-unit-select option[value="default"]'),
         );
+        const perUnit = document.getElementById('ing-modal-per-unit')!;
+        const total = document.getElementById('ing-modal-total')!;
+        assignPerUnitMacros(perUnit, food);
 
         let unitScale = 1;
         // When editing, recover the unit scale from stored servings and qty
@@ -230,21 +223,11 @@ export function recipeEditView(params: Record<string, string>) {
 
         const updateTotal = () => {
           const qty = parseFloat(qtyInput.value) || 1;
-          document.getElementById('ing-modal-total')!.innerHTML = `
-            <span>${Math.round(baseCal * unitScale * qty)} kcal</span>
-            <span>${Math.round(baseC * unitScale * qty * 10) / 10}g C</span>
-            <span>${Math.round(baseP * unitScale * qty * 10) / 10}g P</span>
-            <span>${Math.round(baseF * unitScale * qty * 10) / 10}g F</span>
-          `;
+          assignTotalMacros(total, food, unitScale * qty, 'scaled');
         };
 
         const updatePerUnit = () => {
-          document.getElementById('ing-modal-per-unit')!.innerHTML = `
-            <div class="modal-macro"><strong>${Math.round(baseCal * unitScale)}</strong> kcal</div>
-            <div class="modal-macro"><strong>${Math.round(baseC * unitScale * 10) / 10}g</strong> carbs</div>
-            <div class="modal-macro"><strong>${Math.round(baseP * unitScale * 10) / 10}g</strong> protein</div>
-            <div class="modal-macro"><strong>${Math.round(baseF * unitScale * 10) / 10}g</strong> fat</div>
-          `;
+          assignPerUnitMacros(perUnit, food, unitScale, 'scaled');
         };
 
         if (unitSelect) {

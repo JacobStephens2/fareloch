@@ -2,7 +2,7 @@ import { foods as foodsApi, meals as mealsApi, recipes as recipesApi } from '../
 import { navigate, getQueryParams, setCleanup } from '../router';
 import { toLocalDateStr } from '../state';
 import { createFoodSearchSession, type FoodSearchResult } from '../food-search-session';
-import { assignFoodDetailText, assignSavedMeasureOptions, macroChips, measureCountSuffix, savedMeasureSuffix, sourceLabel, textSpan } from './food-search-text';
+import { assignFoodDetailText, assignPerUnitMacros, assignSavedMeasureOptions, assignTotalMacros, macroChips, measureCountSuffix, savedMeasureSuffix, sourceLabel, textSpan } from './food-search-text';
 import type { Food, ExternalFood, FoodMeasure, Recipe, MealType } from '../types';
 
 export function logFoodView() {
@@ -459,13 +459,6 @@ function showAddModal(food: Food, mealType: MealType, date: string) {
   const measures = parseMeasures(food);
   const hasMeasures = measures.length > 0;
 
-  // Base macros are per food.serving_size (in food.serving_unit, typically grams)
-  // When a measure is selected, scale = measure.gramWeight / food.serving_size
-  const baseCal = food.calories;
-  const baseC = food.carbs_g;
-  const baseP = food.protein_g;
-  const baseF = food.fat_g;
-
   const measureOptions = hasMeasures
     ? `<div class="form-group">
         <label for="unit-select">Unit</label>
@@ -478,12 +471,7 @@ function showAddModal(food: Food, mealType: MealType, date: string) {
   const body = document.getElementById('modal-body')!;
   body.innerHTML = `
     ${food.brand ? '<p class="food-brand"></p>' : ''}
-    <div class="modal-macros" id="modal-per-unit">
-      <div class="modal-macro"><strong>${baseCal}</strong> kcal</div>
-      <div class="modal-macro"><strong>${baseC}g</strong> carbs</div>
-      <div class="modal-macro"><strong>${baseP}g</strong> protein</div>
-      <div class="modal-macro"><strong>${baseF}g</strong> fat</div>
-    </div>
+    <div class="modal-macros" id="modal-per-unit"></div>
     <p class="text-muted" id="modal-per-label"></p>
     ${measureOptions}
     <div class="form-group">
@@ -494,12 +482,7 @@ function showAddModal(food: Food, mealType: MealType, date: string) {
         <button id="serv-plus" class="btn-icon">+</button>
       </div>
     </div>
-    <div class="modal-total" id="modal-total">
-      <span>${baseCal} kcal</span>
-      <span>${baseC}g C</span>
-      <span>${baseP}g P</span>
-      <span>${baseF}g F</span>
-    </div>
+    <div class="modal-total" id="modal-total"></div>
     <button id="add-food-btn" class="btn btn-primary btn-block">Add to ${capitalize(mealType)}</button>
   `;
   assignFoodDetailText(
@@ -508,8 +491,13 @@ function showAddModal(food: Food, mealType: MealType, date: string) {
     document.getElementById('modal-per-label')!,
     document.querySelector('#unit-select option[value="default"]'),
   );
+  const perUnit = document.getElementById('modal-per-unit')!;
+  const total = document.getElementById('modal-total')!;
+  assignPerUnitMacros(perUnit, food);
+  assignTotalMacros(total, food);
 
-  let unitScale = 1; // multiplier for selected unit vs default serving
+  // Selected measure's gram weight divided by the saved serving size.
+  let unitScale = 1;
 
   const servingsInput = document.getElementById('servings-input') as HTMLInputElement;
   const unitSelect = document.getElementById('unit-select') as HTMLSelectElement | null;
@@ -517,29 +505,11 @@ function showAddModal(food: Food, mealType: MealType, date: string) {
 
   const updateTotal = () => {
     const qty = parseFloat(servingsInput.value) || 1;
-    const cal = baseCal * unitScale * qty;
-    const c = baseC * unitScale * qty;
-    const p = baseP * unitScale * qty;
-    const f = baseF * unitScale * qty;
-    document.getElementById('modal-total')!.innerHTML = `
-      <span>${Math.round(cal)} kcal</span>
-      <span>${Math.round(c * 10) / 10}g C</span>
-      <span>${Math.round(p * 10) / 10}g P</span>
-      <span>${Math.round(f * 10) / 10}g F</span>
-    `;
+    assignTotalMacros(total, food, unitScale * qty, 'scaled');
   };
 
   const updatePerUnit = () => {
-    const cal = Math.round(baseCal * unitScale);
-    const c = Math.round(baseC * unitScale * 10) / 10;
-    const p = Math.round(baseP * unitScale * 10) / 10;
-    const f = Math.round(baseF * unitScale * 10) / 10;
-    document.getElementById('modal-per-unit')!.innerHTML = `
-      <div class="modal-macro"><strong>${cal}</strong> kcal</div>
-      <div class="modal-macro"><strong>${c}g</strong> carbs</div>
-      <div class="modal-macro"><strong>${p}g</strong> protein</div>
-      <div class="modal-macro"><strong>${f}g</strong> fat</div>
-    `;
+    assignPerUnitMacros(perUnit, food, unitScale, 'scaled');
   };
 
   if (unitSelect) {

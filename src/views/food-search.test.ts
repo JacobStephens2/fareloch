@@ -549,6 +549,78 @@ it('Log Food add modal and Recipe editor ingredient modal show saved measure lab
   expect(ingredientModal.querySelector('#ing-unit-select option[value="1"]')!.textContent).toBe('slice</option><img alt="slice"> (30g)');
 });
 
+it('Log Food add modal and Recipe editor ingredient modal show saved food calories, carbs, protein, and fat as text', async () => {
+  const calories = '11<img alt="calories">';
+  const carbs = '22<img alt="carbs">';
+  const protein = '33<img alt="protein">';
+  const fat = '44<img alt="fat">';
+  const item = food('Apple');
+  item.calories = calories as unknown as number;
+  item.carbs_g = carbs as unknown as number;
+  item.protein_g = protein as unknown as number;
+  item.fat_g = fat as unknown as number;
+  vi.mocked(foods.search).mockResolvedValue({ foods: [item], external: [] });
+
+  const expectAmounts = (root: Element, per: string, total: string) => {
+    expect(root.querySelector('img')).toBeNull();
+    const strongs = [...root.querySelectorAll(`${per} strong`)].map((node) => node.textContent);
+    expect(strongs).toEqual([calories, `${carbs}g`, `${protein}g`, `${fat}g`]);
+    const totals = [...root.querySelectorAll(`${total} span`)].map((node) => node.textContent);
+    expect(totals).toEqual([`${calories} kcal`, `${carbs}g C`, `${protein}g P`, `${fat}g F`]);
+  };
+  const chooseCup = (selector: string) => {
+    const unit = document.querySelector<HTMLSelectElement>(selector)!;
+    unit.value = '0';
+    unit.dispatchEvent(new Event('change'));
+  };
+
+  go('/log');
+  input('#food-search', 'apple');
+  await vi.advanceTimersByTimeAsync(400);
+  click('#tab-content .food-item');
+  const addModal = document.querySelector('#food-detail-modal')!;
+  expectAmounts(addModal, '#modal-per-unit', '#modal-total');
+  input('#servings-input', '3');
+  expectAmounts(addModal, '#modal-per-unit', '#modal-total');
+  chooseCup('#unit-select');
+  expect(addModal.querySelector('#modal-per-label')!.textContent).toBe('Per cup (200g)');
+  expectAmounts(addModal, '#modal-per-unit', '#modal-total');
+
+  go('/recipe');
+  input('#ing-search', 'apple');
+  await vi.advanceTimersByTimeAsync(400);
+  click('#ing-results .food-item');
+  const ingredientModal = document.querySelector('#ing-modal')!;
+  expectAmounts(ingredientModal, '#ing-modal-per-unit', '#ing-modal-total');
+  input('#ing-qty', '4');
+  expectAmounts(ingredientModal, '#ing-modal-per-unit', '#ing-modal-total');
+  chooseCup('#ing-unit-select');
+  expect(ingredientModal.querySelector('#ing-modal-per-label')!.textContent).toBe('Per cup (200g)');
+  expectAmounts(ingredientModal, '#ing-modal-per-unit', '#ing-modal-total');
+
+  const scaled = food('Pear');
+  vi.mocked(foods.search).mockResolvedValue({ foods: [scaled], external: [] });
+  go('/log');
+  input('#food-search', 'pear');
+  await vi.advanceTimersByTimeAsync(400);
+  click('#tab-content .food-item');
+  input('#servings-input', '2');
+  expect([...document.querySelectorAll('#modal-total span')].map((node) => node.textContent)).toEqual(['200 kcal', '20g C', '10g P', '8g F']);
+  chooseCup('#unit-select');
+  expect([...document.querySelectorAll('#modal-per-unit strong')].map((node) => node.textContent)).toEqual(['200', '20g', '10g', '8g']);
+  expect([...document.querySelectorAll('#modal-total span')].map((node) => node.textContent)).toEqual(['400 kcal', '40g C', '20g P', '16g F']);
+
+  go('/recipe');
+  input('#ing-search', 'pear');
+  await vi.advanceTimersByTimeAsync(400);
+  click('#ing-results .food-item');
+  input('#ing-qty', '2');
+  expect([...document.querySelectorAll('#ing-modal-total span')].map((node) => node.textContent)).toEqual(['200 kcal', '20g C', '10g P', '8g F']);
+  chooseCup('#ing-unit-select');
+  expect([...document.querySelectorAll('#ing-modal-per-unit strong')].map((node) => node.textContent)).toEqual(['200', '20g', '10g', '8g']);
+  expect([...document.querySelectorAll('#ing-modal-total span')].map((node) => node.textContent)).toEqual(['400 kcal', '40g C', '20g P', '16g F']);
+});
+
 it('recipe ingredient list shows the name and unit as text', async () => {
   const name = 'Apple<img alt="ingredient-name">';
   const unit = 'cup<img alt="ingredient-unit">';
