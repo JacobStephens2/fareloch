@@ -534,9 +534,9 @@ function showEditMealModal(meal: MealLog, date: string) {
         <div class="modal-macro"><strong>${Math.round(perUnitP * 10) / 10}g</strong> protein</div>
         <div class="modal-macro"><strong>${Math.round(perUnitF * 10) / 10}g</strong> fat</div>
       </div>
-      <p class="text-muted">Per ${meal.unit_label || (meal.serving_size && meal.serving_unit ? `${meal.serving_size}${meal.serving_unit}` : 'serving')}</p>
+      <p class="text-muted" id="edit-per-label"></p>
       <div class="form-group">
-        <label for="edit-servings">${meal.unit_label ? meal.unit_label : 'Servings'}</label>
+        <label for="edit-servings" id="edit-qty-label"></label>
         <div class="servings-control">
           <button type="button" id="edit-serv-minus" class="btn-icon">-</button>
           <input type="number" id="edit-servings" value="${parseFloat(displayQty.toFixed(2))}" min="1" step="1" />
@@ -563,6 +563,11 @@ function showEditMealModal(meal: MealLog, date: string) {
         <button type="button" id="edit-delete-btn" class="btn btn-danger" style="flex:0 0 auto">Delete</button>
       </div>
     `;
+
+    const perUnitLabel = meal.unit_label
+      || (meal.serving_size && meal.serving_unit ? `${meal.serving_size}${meal.serving_unit}` : 'serving');
+    document.getElementById('edit-per-label')!.textContent = `Per ${perUnitLabel}`;
+    document.getElementById('edit-qty-label')!.textContent = meal.unit_label ? meal.unit_label : 'Servings';
 
     const servingsInput = document.getElementById('edit-servings') as HTMLInputElement;
     const updateTotal = () => {
