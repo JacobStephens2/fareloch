@@ -59,12 +59,8 @@ afterEach(() => {
   go('/other');
 });
 
-it('edit meal modal shows a saved measure label as text on the per-unit line and the quantity label', async () => {
-  const label = 'cup<img alt="measure">';
-  vi.mocked(meals.getByDate).mockResolvedValue({
-    meals: [meal({ unit_label: label })],
-  });
-
+async function openEditMealModal(entry: MealLog): Promise<Element> {
+  vi.mocked(meals.getByDate).mockResolvedValue({ meals: [entry] });
   go('/');
   await vi.waitFor(() => {
     expect(document.querySelector('.meal-item')).toBeTruthy();
@@ -76,7 +72,20 @@ it('edit meal modal shows a saved measure label as text on the per-unit line and
 
   const modal = document.querySelector('#edit-meal-modal')!;
   expect(modal.classList.contains('hidden')).toBe(false);
+  return modal;
+}
+
+it('edit meal modal shows a saved measure label as text on the per-unit line and the quantity label', async () => {
+  const label = 'cup<img alt="measure">';
+  const modal = await openEditMealModal(meal({ unit_label: label }));
   expect(modal.querySelector('img')).toBeNull();
   expect(modal.querySelector('p.text-muted')!.textContent).toBe(`Per ${label}`);
   expect(modal.querySelector('label[for="edit-servings"]')!.textContent).toBe(label);
+});
+
+it('edit meal modal shows a saved food brand as text', async () => {
+  const brand = 'Acme<img alt="brand">';
+  const modal = await openEditMealModal(meal({ food_brand: brand }));
+  expect(modal.querySelector('img')).toBeNull();
+  expect(modal.querySelector('.food-brand')!.textContent).toBe(brand);
 });
