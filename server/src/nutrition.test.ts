@@ -65,6 +65,31 @@ describe('recipePerServing', () => {
     expect(perServing).toEqual({ calories: 200, carbsG: 25, proteinG: 0, fatG: 0 });
   });
 
+  it('keeps manual macros when calories are 0', () => {
+    const perServing = recipePerServing(
+      {
+        total_servings: 1,
+        manual_calories: 0,
+        manual_carbs_g: null,
+        manual_protein_g: null,
+        manual_fat_g: null,
+      },
+      [{ food: oats, servings: 1 }],
+    );
+    expect(perServing).toEqual({ calories: 0, carbsG: 0, proteinG: 0, fatG: 0 });
+  });
+
+  it('counts a zero-servings row as zero, not as one serving', () => {
+    const perServing = recipePerServing(
+      { total_servings: 1, ...noManual },
+      [
+        { food: oats, servings: 0 },
+        { food: oats, servings: 2 },
+      ],
+    );
+    expect(perServing).toEqual({ calories: 300, carbsG: 54, proteinG: 10, fatG: 5 });
+  });
+
   it('treats total servings of 0 or null as 1', () => {
     const ingredients = [{ food: oats, servings: 2 }];
     const expected = { calories: 300, carbsG: 54, proteinG: 10, fatG: 5 };

@@ -168,8 +168,8 @@ function recipeIngredients(id: number): RecipeIngredient[] {
 // since its manual macros override the ingredient sum (as server/src/recipe-ingredients.ts).
 function recipeIngredientRows(recipe: StoredRecipe): IngredientRow[] {
   if (recipe.manual_calories != null) return [];
-  // Rows saved before servings defaulted to 1 may hold 0 or nothing; count them as 1 serving.
-  return recipeIngredients(recipe.id).map((ing) => ({ food: ing, servings: ing.servings || 1 }));
+  // A missing servings field is a legacy row. Zero is a real count and must reach recipePerServing, as the server read does.
+  return recipeIngredients(recipe.id).map((ing) => ({ food: ing, servings: ing.servings ?? 1 }));
 }
 
 function withNutrition(recipe: StoredRecipe): Recipe {

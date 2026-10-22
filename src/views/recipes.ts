@@ -3,6 +3,15 @@ import { navigate } from '../router';
 import type { Food, FoodMeasure, RecipeIngredient } from '../types';
 import { macrosOf, scaleMacros, recipePerServing, roundMacros, unitScale, caloriesFromMacros } from '../../server/src/nutrition';
 
+// A blank manual field is unset. Zero is a real Manual macros value, so it must not collapse to null.
+function manualNumber(raw: string | null | undefined): number | null {
+  if (raw == null) return null;
+  const trimmed = raw.trim();
+  if (trimmed === '') return null;
+  const n = Number(trimmed);
+  return Number.isFinite(n) ? n : null;
+}
+
 export function recipesView() {
   return {
     html: `
@@ -423,10 +432,10 @@ export function recipeEditView(params: Record<string, string>) {
 
         try {
           const ingData = ingredients.map((i) => ({ foodId: i.foodId, servings: i.servings, qty: i.qty, unitLabel: i.unitLabel }));
-          const manualCalories = mode === 'manual' ? (parseFloat(manualCalInput.value) || null) : null;
-          const manualCarbsG = mode === 'manual' ? (parseFloat((document.getElementById('manual-carbs') as HTMLInputElement).value) || null) : null;
-          const manualProteinG = mode === 'manual' ? (parseFloat((document.getElementById('manual-protein') as HTMLInputElement).value) || null) : null;
-          const manualFatG = mode === 'manual' ? (parseFloat((document.getElementById('manual-fat') as HTMLInputElement).value) || null) : null;
+          const manualCalories = mode === 'manual' ? manualNumber(manualCalInput.value) : null;
+          const manualCarbsG = mode === 'manual' ? manualNumber((document.getElementById('manual-carbs') as HTMLInputElement).value) : null;
+          const manualProteinG = mode === 'manual' ? manualNumber((document.getElementById('manual-protein') as HTMLInputElement).value) : null;
+          const manualFatG = mode === 'manual' ? manualNumber((document.getElementById('manual-fat') as HTMLInputElement).value) : null;
 
           if (isNew) {
             await recipesApi.create({ name, totalServings, servingUnit, ingredients: ingData, manualCalories, manualCarbsG, manualProteinG, manualFatG });
@@ -530,9 +539,9 @@ function updateTotals(
   const totalsEl = document.getElementById('recipe-totals');
   if (!totalsEl) return;
 
-  // Same coalescing as the save handler, so blank manual calories fall back to the ingredients
+  // Same parsing as the save handler: blank manual calories fall back to the ingredients, and 0 stays 0.
   const manualValue = (id: string) =>
-    mode === 'manual' ? (parseFloat((document.getElementById(id) as HTMLInputElement)?.value) || null) : null;
+    mode === 'manual' ? manualNumber((document.getElementById(id) as HTMLInputElement)?.value) : null;
   const perServing = roundMacros(recipePerServing(
     {
       total_servings: servings,
