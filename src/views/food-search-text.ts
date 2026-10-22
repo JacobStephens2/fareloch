@@ -27,6 +27,80 @@ export function assignSavedMeasureOptions(
   });
 }
 
+type SavedFoodMacros = {
+  calories: number;
+  carbs_g: number;
+  protein_g: number;
+  fat_g: number;
+};
+
+type MacroRounding = 'exact' | 'rounded';
+
+// Non-finite saved amounts stay text; only finite numbers are scaled.
+function macroText(value: number, scale: number, rounding: MacroRounding, place: 'kcal' | 'gram'): string {
+  const numeric = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(numeric)) return String(value);
+  if (rounding === 'exact') return String(value);
+  const scaled = numeric * scale;
+  return place === 'kcal' ? String(Math.round(scaled)) : String(Math.round(scaled * 10) / 10);
+}
+
+function macroFigures(food: SavedFoodMacros, scale: number, rounding: MacroRounding) {
+  return {
+    calories: macroText(food.calories, scale, rounding, 'kcal'),
+    carbs: macroText(food.carbs_g, scale, rounding, 'gram'),
+    protein: macroText(food.protein_g, scale, rounding, 'gram'),
+    fat: macroText(food.fat_g, scale, rounding, 'gram'),
+  };
+}
+
+function macroLine(strongText: string, label: string): HTMLDivElement {
+  const line = document.createElement('div');
+  line.className = 'modal-macro';
+  const strong = document.createElement('strong');
+  strong.textContent = strongText;
+  line.append(strong, document.createTextNode(` ${label}`));
+  return line;
+}
+
+function totalLine(text: string): HTMLSpanElement {
+  const span = document.createElement('span');
+  span.textContent = text;
+  return span;
+}
+
+export function assignPerUnitMacros(
+  container: Element,
+  food: SavedFoodMacros,
+  scale = 1,
+  rounding: MacroRounding = 'exact',
+): void {
+  const figures = macroFigures(food, scale, rounding);
+  container.textContent = '';
+  container.append(
+    macroLine(figures.calories, 'kcal'),
+    macroLine(`${figures.carbs}g`, 'carbs'),
+    macroLine(`${figures.protein}g`, 'protein'),
+    macroLine(`${figures.fat}g`, 'fat'),
+  );
+}
+
+export function assignTotalMacros(
+  container: Element,
+  food: SavedFoodMacros,
+  scale = 1,
+  rounding: MacroRounding = 'exact',
+): void {
+  const figures = macroFigures(food, scale, rounding);
+  container.textContent = '';
+  container.append(
+    totalLine(`${figures.calories} kcal`),
+    totalLine(`${figures.carbs}g C`),
+    totalLine(`${figures.protein}g P`),
+    totalLine(`${figures.fat}g F`),
+  );
+}
+
 export function textSpan(className: string, text: string): HTMLSpanElement {
   const span = document.createElement('span');
   span.className = className;
