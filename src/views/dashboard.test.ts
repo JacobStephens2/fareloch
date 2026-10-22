@@ -89,3 +89,26 @@ it('edit meal modal shows a saved food brand as text', async () => {
   expect(modal.querySelector('img')).toBeNull();
   expect(modal.querySelector('.food-brand')!.textContent).toBe(brand);
 });
+
+async function showMealItem(entry: MealLog): Promise<HTMLElement> {
+  vi.mocked(meals.getByDate).mockResolvedValue({ meals: [entry] });
+  go('/');
+  await vi.waitFor(() => {
+    expect(document.querySelector('.meal-item')).toBeTruthy();
+  });
+  return document.querySelector<HTMLElement>('.meal-item')!;
+}
+
+it('dashboard meal list shows a logged meal name as text', async () => {
+  const name = 'Apple<img alt="name">';
+  const item = await showMealItem(meal({ food_name: name, servings: 1 }));
+  expect(item.querySelector('img')).toBeNull();
+  expect(item.querySelector('.meal-item-name')!.textContent).toBe(name);
+});
+
+it('dashboard meal list shows a logged meal brand as text', async () => {
+  const brand = 'Acme<img alt="brand">';
+  const item = await showMealItem(meal({ food_brand: brand, servings: 1 }));
+  expect(item.querySelector('img')).toBeNull();
+  expect(item.querySelector('.food-brand')!.textContent).toBe(brand);
+});
