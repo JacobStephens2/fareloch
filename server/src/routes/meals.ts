@@ -1,20 +1,26 @@
 import { Router, Request, Response } from 'express';
 import { getDb } from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
+import { acceptedFoodId, foodVisibleToCaller } from '../food-owner.js';
 import { Macros, macrosOf, scaleMacros, recipePerServing, roundMacros } from '../nutrition.js';
 import { recipeIngredientRows } from '../recipe-ingredients.js';
 
 const router = Router();
 
-// Get meals for a date
-router.get('/:date', requireAuth, (req: Request, res: Response) => {
-  const db = getDb();
-  const meals = db.prepare(`
+function mealWithFood(tail: string): string {
+  return `
     SELECT m.*, f.name as food_name, f.brand as food_brand, f.serving_size, f.serving_unit,
            r.name as recipe_name
     FROM meal_logs m
-    LEFT JOIN foods f ON m.food_id = f.id
+    LEFT JOIN foods f ON m.food_id = f.id AND ${foodVisibleToCaller('f')}
     LEFT JOIN recipes r ON m.recipe_id = r.id
+    ${tail}`;
+}
+
+// Get meals for a date
+router.get('/:date', requireAuth, (req: Request, res: Response) => {
+  const db = getDb();
+  const meals = db.prepare(mealWithFood(`
     WHERE m.user_id = ? AND m.date = ?
     ORDER BY
       CASE m.meal_type
@@ -24,7 +30,7 @@ router.get('/:date', requireAuth, (req: Request, res: Response) => {
         WHEN 'snack' THEN 4
       END,
       m.created_at
-  `).all(req.user!.userId, req.params.date);
+  `)).all(req.user!.userId, req.user!.userId, req.params.date);
   res.json({ meals });
 });
 
@@ -62,12 +68,18 @@ router.post('/', requireAuth, (req: Request, res: Response) => {
 
     const finalServings = servings || 1;
     let finalMacros: Macros = { calories: calories || 0, carbsG: carbsG || 0, proteinG: proteinG || 0, fatG: fatG || 0 };
+    let linkedFoodId: number | null = null;
 
-    // Calculate from food
+    // Macros and the stored food id come from a food the caller owns, or from a food with no owner.
     if (foodId) {
-      const food = db.prepare('SELECT * FROM foods WHERE id = ?').get(foodId) as any;
+      const food = db.prepare(
+        `SELECT * FROM foods WHERE id = ? AND ${foodVisibleToCaller()}`
+      ).get(foodId, req.user!.userId) as any;
       if (food) {
         finalMacros = scaleMacros(macrosOf(food), finalServings);
+        linkedFoodId = Number(foodId);
+      } else {
+        linkedFoodId = acceptedFoodId(db, foodId, req.user!.userId);
       }
     }
 
@@ -75,7 +87,7 @@ router.post('/', requireAuth, (req: Request, res: Response) => {
     if (recipeId) {
       const recipe = db.prepare('SELECT * FROM recipes WHERE id = ? AND user_id = ?').get(recipeId, req.user!.userId) as any;
       if (recipe) {
-        const perServing = recipePerServing(recipe, recipeIngredientRows(db, recipe));
+        const perServing = recipePerServing(recipe, recipeIngredientRows(db, recipe, req.user!.userId));
         finalMacros = scaleMacros(perServing, finalServings);
       }
     }
@@ -84,7 +96,7 @@ router.post('/', requireAuth, (req: Request, res: Response) => {
     const result = db.prepare(`
       INSERT INTO meal_logs (user_id, date, meal_type, food_id, recipe_id, servings, calories, carbs_g, protein_g, fat_g, note, unit_label, unit_scale)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(req.user!.userId, date, mealType, foodId || null, recipeId || null,
+    `).run(req.user!.userId, date, mealType, linkedFoodId, recipeId || null,
            finalServings,
            stored.calories,
            stored.carbsG,
@@ -94,14 +106,7 @@ router.post('/', requireAuth, (req: Request, res: Response) => {
            unitLabel || null,
            unitScale || null);
 
-    const meal = db.prepare(`
-      SELECT m.*, f.name as food_name, f.brand as food_brand, f.serving_size, f.serving_unit,
-             r.name as recipe_name
-      FROM meal_logs m
-      LEFT JOIN foods f ON m.food_id = f.id
-      LEFT JOIN recipes r ON m.recipe_id = r.id
-      WHERE m.id = ?
-    `).get(result.lastInsertRowid);
+    const meal = db.prepare(mealWithFood('WHERE m.id = ?')).get(req.user!.userId, result.lastInsertRowid);
 
     res.json({ meal });
   } catch (e) {
@@ -133,14 +138,7 @@ router.put('/:id', requireAuth, (req: Request, res: Response) => {
       WHERE id = ?
     `).run(servings, mealType, calories, carbsG, proteinG, fatG, note, req.params.id);
 
-    const meal = db.prepare(`
-      SELECT m.*, f.name as food_name, f.brand as food_brand, f.serving_size, f.serving_unit,
-             r.name as recipe_name
-      FROM meal_logs m
-      LEFT JOIN foods f ON m.food_id = f.id
-      LEFT JOIN recipes r ON m.recipe_id = r.id
-      WHERE m.id = ?
-    `).get(req.params.id);
+    const meal = db.prepare(mealWithFood('WHERE m.id = ?')).get(req.user!.userId, req.params.id);
 
     res.json({ meal });
   } catch (e) {
@@ -190,11 +188,11 @@ router.get('/export/csv', requireAuth, (req: Request, res: Response) => {
     SELECT m.date, m.meal_type, m.servings, m.calories, m.carbs_g, m.protein_g, m.fat_g, m.note,
            f.name as food_name, f.brand as food_brand, r.name as recipe_name
     FROM meal_logs m
-    LEFT JOIN foods f ON m.food_id = f.id
+    LEFT JOIN foods f ON m.food_id = f.id AND ${foodVisibleToCaller('f')}
     LEFT JOIN recipes r ON m.recipe_id = r.id
     WHERE m.user_id = ?
     ORDER BY m.date DESC, m.meal_type
-  `).all(req.user!.userId) as any[];
+  `).all(req.user!.userId, req.user!.userId) as any[];
 
   const header = 'Date,Meal,Food,Brand,Servings,Calories,Carbs(g),Protein(g),Fat(g),Note';
   const rows = meals.map((m: any) => {
@@ -233,7 +231,11 @@ router.post('/copy', requireAuth, (req: Request, res: Response) => {
 
     const tx = db.transaction(() => {
       for (const m of sourceMeals) {
-        insert.run(req.user!.userId, toDate, m.meal_type, m.food_id, m.recipe_id, m.servings, m.calories, m.carbs_g, m.protein_g, m.fat_g, m.note);
+        insert.run(
+          req.user!.userId, toDate, m.meal_type,
+          acceptedFoodId(db, m.food_id, req.user!.userId),
+          m.recipe_id, m.servings, m.calories, m.carbs_g, m.protein_g, m.fat_g, m.note,
+        );
       }
     });
     tx();
