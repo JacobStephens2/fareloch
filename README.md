@@ -16,7 +16,7 @@ See [FARELOCH-NAME.md](./FARELOCH-NAME.md) for the rename decision record.
 - **Barcode scanner** — scan packaged foods using device camera
 - **Custom foods** — create your own foods with manual macro entry, auto-calculated calories
 - **Recipes** — build from ingredients or enter macros manually, custom serving units
-- **Weight tracking** — log weight with trend chart (Chart.js)
+- **Weight tracking** - log weight and optional navel waist circumference, with a trend chart and a personal Waist-Thermostat ceiling
 - **Copy previous day** — one-tap meal duplication for repetitive diets
 - **Tap to edit, swipe to delete** — touch-friendly meal management
 - **CSV export** — download meal logs and weight data

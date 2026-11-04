@@ -1,5 +1,6 @@
-import type { User, Food, ExternalFood, MealLog, Recipe, RecipeIngredient, WeightLog } from './types';
+import type { User, Food, ExternalFood, MealLog, Recipe, RecipeIngredient, WeightLog, WeightLogInput } from './types';
 import { type IngredientRow, type Macros, macrosOf, scaleMacros, recipePerServing, roundMacros } from '../server/src/nutrition';
+import { isWaistInches } from '../server/src/waist';
 
 const GUEST_KEY = 'guest_mode';
 const SAMPLE_KEY = 'guest_sample_active';
@@ -114,6 +115,7 @@ export function seedSampleData() {
     date,
     time: '07:00',
     weight_lbs: 165,
+    waist_inches: null,
     notes: null,
     _sample: true,
   };
@@ -214,6 +216,7 @@ const DEFAULT_GUEST_USER: User = {
   emailVerified: false,
   heightInches: 0,
   currentWeightLbs: 0,
+  targetWaistInches: null,
   targetCalories: 2000,
   targetCarbsG: 250,
   targetProteinG: 150,
@@ -235,6 +238,9 @@ export const localAuth = {
   },
 
   updateProfile: async (data: Partial<User>): Promise<{ user: User }> => {
+    if (data.targetWaistInches != null && !isWaistInches(data.targetWaistInches)) {
+      throw new Error('Waist ceiling must be a number between 20 and 60 inches');
+    }
     const user = getGuestUser();
     Object.assign(user, data);
     setStore('guest_user', user);
@@ -627,7 +633,9 @@ export const localRecipes = {
 // Weight
 export const localWeight = {
   list: async (limit?: number): Promise<{ logs: WeightLog[] }> => {
-    let logs = getStore<WeightLog[]>('guest_weight', []);
+    let logs = getStore<WeightLog[]>('guest_weight', []).map((log) => ({
+      ...log, waist_inches: log.waist_inches ?? null,
+    }));
     logs.sort((a, b) => {
       const cmp = b.date.localeCompare(a.date);
       if (cmp !== 0) return cmp;
@@ -637,7 +645,10 @@ export const localWeight = {
     return { logs };
   },
 
-  log: async (date: string, weightLbs: number, time?: string, notes?: string): Promise<{ log: WeightLog }> => {
+  log: async ({ date, weightLbs, time, notes, waistInches }: WeightLogInput): Promise<{ log: WeightLog }> => {
+    if (waistInches != null && !isWaistInches(waistInches)) {
+      throw new Error('Waist must be a number between 20 and 60 inches');
+    }
     const logs = getStore<WeightLog[]>('guest_weight', []);
     const timeVal = time || '';
     const existing = logs.findIndex((l) => l.date === date && (l.time || '') === timeVal);
@@ -646,6 +657,7 @@ export const localWeight = {
       date,
       time: timeVal,
       weight_lbs: weightLbs,
+      waist_inches: waistInches ?? null,
       notes: notes || null,
     };
     if (existing >= 0) logs[existing] = log;

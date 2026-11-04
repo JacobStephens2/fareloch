@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import nodemailer from 'nodemailer';
 import { getDb } from '../db.js';
 import { signToken, setTokenCookie, requireAuth } from '../middleware/auth.js';
+import { isWaistInches } from '../waist.js';
 
 const router = Router();
 
@@ -87,7 +88,7 @@ router.post('/register', async (req: Request, res: Response) => {
 
     const token = signToken({ userId, email: email.toLowerCase().trim(), firstName: firstName.trim() });
     setTokenCookie(res, token);
-    res.json({ user: { id: userId, email, firstName, emailVerified: false }, token });
+    res.json({ user: { id: userId, email, firstName, emailVerified: false, targetWaistInches: null }, token });
   } catch (e) {
     console.error('Register error:', e);
     res.status(500).json({ error: 'Registration failed' });
@@ -126,6 +127,7 @@ router.post('/login', async (req: Request, res: Response) => {
         emailVerified: !!user.email_verified,
         heightInches: user.height_inches,
         currentWeightLbs: user.current_weight_lbs,
+        targetWaistInches: user.target_waist_inches,
         targetCalories: user.target_calories,
         targetCarbsG: user.target_carbs_g,
         targetProteinG: user.target_protein_g,
@@ -159,6 +161,7 @@ router.get('/me', requireAuth, (req: Request, res: Response) => {
       emailVerified: !!user.email_verified,
       heightInches: user.height_inches,
       currentWeightLbs: user.current_weight_lbs,
+      targetWaistInches: user.target_waist_inches,
       targetCalories: user.target_calories,
       targetCarbsG: user.target_carbs_g,
       targetProteinG: user.target_protein_g,
@@ -172,15 +175,20 @@ router.put('/me', requireAuth, async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const {
-      firstName, heightInches, currentWeightLbs,
+      firstName, heightInches, currentWeightLbs, targetWaistInches,
       targetCalories, targetCarbsG, targetProteinG, targetFatG,
       workoutTargetCalories, workoutTargetCarbsG, workoutTargetProteinG, workoutTargetFatG,
     } = req.body;
+    if (targetWaistInches != null && !isWaistInches(targetWaistInches)) {
+      res.status(400).json({ error: 'Waist ceiling must be a number between 20 and 60 inches' });
+      return;
+    }
     db.prepare(`
       UPDATE users SET
         first_name = COALESCE(?, first_name),
         height_inches = COALESCE(?, height_inches),
         current_weight_lbs = COALESCE(?, current_weight_lbs),
+        target_waist_inches = CASE WHEN ? THEN ? ELSE target_waist_inches END,
         target_calories = COALESCE(?, target_calories),
         target_carbs_g = COALESCE(?, target_carbs_g),
         target_protein_g = COALESCE(?, target_protein_g),
@@ -192,6 +200,7 @@ router.put('/me', requireAuth, async (req: Request, res: Response) => {
       WHERE id = ?
     `).run(
       firstName, heightInches, currentWeightLbs,
+      targetWaistInches !== undefined ? 1 : 0, targetWaistInches ?? null,
       targetCalories, targetCarbsG, targetProteinG, targetFatG,
       workoutTargetCalories, workoutTargetCarbsG, workoutTargetProteinG, workoutTargetFatG,
       req.user!.userId
@@ -206,6 +215,7 @@ router.put('/me', requireAuth, async (req: Request, res: Response) => {
         emailVerified: !!user.email_verified,
         heightInches: user.height_inches,
         currentWeightLbs: user.current_weight_lbs,
+        targetWaistInches: user.target_waist_inches,
         targetCalories: user.target_calories,
         targetCarbsG: user.target_carbs_g,
         targetProteinG: user.target_protein_g,

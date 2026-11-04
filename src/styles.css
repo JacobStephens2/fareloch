@@ -1219,6 +1219,19 @@ input.searching,
   box-shadow: 0 12px 32px -4px rgba(18, 28, 42, 0.06);
 }
 
+.waist-summary {
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  border-radius: var(--radius);
+  background: var(--surface-low);
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.waist-summary.above-ceiling {
+  color: var(--danger);
+}
+
 .weight-history h3 {
   font-size: 1.125rem;
   font-weight: 700;
@@ -1248,6 +1261,12 @@ input.searching,
   font-size: 1rem;
   font-weight: 600;
   letter-spacing: -0.01em;
+}
+
+.weight-waist {
+  display: block;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
 }
 
 .btn-delete-weight {

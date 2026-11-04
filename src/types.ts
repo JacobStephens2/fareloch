@@ -5,6 +5,7 @@ export interface User {
   emailVerified: boolean;
   heightInches: number;
   currentWeightLbs: number;
+  targetWaistInches: number | null;
   targetCalories: number;
   targetCarbsG: number;
   targetProteinG: number;
@@ -117,10 +118,19 @@ export interface RecipeIngredient {
   measures: string | null;
 }
 
+export interface WeightLogInput {
+  date: string;
+  weightLbs: number;
+  time?: string;
+  notes?: string;
+  waistInches?: number | null;
+}
+
 export interface WeightLog {
   id: number;
   date: string;
   time: string;
   weight_lbs: number;
+  waist_inches: number | null;
   notes: string | null;
 }
