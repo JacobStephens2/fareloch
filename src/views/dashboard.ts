@@ -3,6 +3,7 @@ import { state, formatDate, todayStr, toLocalDateStr } from '../state';
 import { navigate } from '../router';
 import { isGuestMode, hasSampleData, dismissSampleData } from '../local-db';
 import type { MealLog, MealType } from '../types';
+import { mealPulseStatus } from '../../server/src/nutrition';
 
 function formatDateSub(dateStr: string): string {
   const d = new Date(dateStr + 'T12:00:00');
@@ -125,9 +126,10 @@ export function dashboardView() {
         </div>
 
         <div class="dashboard-legend">
-          <p><span class="legend-swatch swatch-on-track"></span> On track — meal is 90%+ of per-meal target (daily / 4)</p>
-          <p><span class="legend-swatch swatch-partial"></span> Partial — meal is 50-90% of per-meal target</p>
-          <p><span class="legend-swatch swatch-low"></span> Low — meal is under 50% of per-meal target</p>
+          <p><span class="legend-swatch swatch-on-track"></span> On track - both calories and protein reach 85%+ of per-meal targets (daily / 4)</p>
+          <p><span class="legend-swatch swatch-partial"></span> Partial - either calories or protein reaches 50%+, but not both reach 85%</p>
+          <p><span class="legend-swatch swatch-low"></span> Low - both calories and protein are under 50% of per-meal targets</p>
+          <p>Outlined protein chip - protein reaches 85%+ of its per-meal target</p>
         </div>
 
         <div id="edit-meal-modal" class="modal hidden">
@@ -372,22 +374,24 @@ function renderMeals(container: HTMLElement, mealList: MealLog[], date: string) 
 
     // Per-meal target: daily / 4 (equal split)
     const tg = getTargets();
-    const mealTargetCal = Math.round(tg.cal / 4);
+    const mealTargetCal = tg.cal / 4;
     const mealTargetC = Math.round(tg.carbs / 4);
-    const mealTargetP = Math.round(tg.protein / 4);
+    const mealTargetP = tg.protein / 4;
     const mealTargetF = Math.round(tg.fat / 4);
-    const mealPct = mealTargetCal > 0 ? subtotals.cal / mealTargetCal : 0;
-    const mealStatus = mealPct >= 0.9 ? 'on-track' : mealPct >= 0.5 ? 'partial' : items.length > 0 ? 'low' : '';
+    const mealStatus = mealPulseStatus(
+      { calories: subtotals.cal, carbsG: subtotals.c, proteinG: subtotals.p, fatG: subtotals.f },
+      { calories: mealTargetCal, carbsG: mealTargetC, proteinG: mealTargetP, fatG: mealTargetF },
+    );
 
     html += `
       <div class="meal-section ${mealStatus}">
         <div class="meal-header">
           <h3>${MEAL_LABELS[type]}</h3>
-          <span class="meal-subtotal">${Math.round(subtotals.cal)} / ${mealTargetCal} kcal</span>
+          <span class="meal-subtotal">${Math.round(subtotals.cal)} / ${Math.round(mealTargetCal)} kcal</span>
         </div>
         ${items.length > 0 ? `<div class="meal-macro-chips">
           <span class="macro-chip chip-carbs">${Math.round(subtotals.c)}/${mealTargetC}c</span>
-          <span class="macro-chip chip-protein">${Math.round(subtotals.p)}/${mealTargetP}p</span>
+          <span class="macro-chip chip-protein${subtotals.p >= 0.85 * mealTargetP ? ' chip-protein-hit' : ''}">${Math.round(subtotals.p)}/${Math.round(mealTargetP)}p</span>
           <span class="macro-chip chip-fat">${Math.round(subtotals.f)}/${mealTargetF}f</span>
         </div>` : ''}
         <div class="meal-items">

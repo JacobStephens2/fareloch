@@ -9,6 +9,17 @@ export interface Macros {
   fatG: number;
 }
 
+export function mealPulseStatus(mealMacros: Macros, targetMealMacros: Macros): 'on-track' | 'partial' | 'low' | '' {
+  if (mealMacros.calories === 0 && mealMacros.carbsG === 0 && mealMacros.proteinG === 0 && mealMacros.fatG === 0) return '';
+  if (mealMacros.calories >= 0.85 * targetMealMacros.calories && mealMacros.proteinG >= 0.85 * targetMealMacros.proteinG) {
+    return 'on-track';
+  }
+  if (mealMacros.calories >= 0.5 * targetMealMacros.calories || mealMacros.proteinG >= 0.5 * targetMealMacros.proteinG) {
+    return 'partial';
+  }
+  return 'low';
+}
+
 // A row with snake_case macro columns: food, ingredient join, meal log.
 export interface MacroRow {
   calories?: number | null;

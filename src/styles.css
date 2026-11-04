@@ -796,6 +796,10 @@ input, button, select, textarea {
 .chip-protein { background: rgba(239,68,68,0.10); color: #DC2626; }
 .chip-fat { background: rgba(245,158,11,0.10); color: #D97706; }
 
+.meal-macro-chips .chip-protein-hit {
+  box-shadow: inset 0 0 0 2px var(--primary-container);
+}
+
 /* ===== FOOD LIST ===== */
 .food-list {
   display: flex;
