@@ -198,7 +198,7 @@ function renderChart(logs: WeightLog[], targetWaistInches: number | null) {
             title: (items) => {
               const point = items[0];
               if (point.parsed.x == null) return '';
-              const date = new Date(point.parsed.x).toLocaleDateString('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric' });
+              const date = formatChartDate(point.parsed.x);
               const time = point.datasetIndex === 0 ? sorted[point.dataIndex].time : '';
               return time ? `${date} ${time}` : date;
             },
@@ -217,12 +217,16 @@ function renderChart(logs: WeightLog[], targetWaistInches: number | null) {
           type: 'linear',
           ticks: {
             maxTicksLimit: 8,
-            callback: (value) => new Date(Number(value)).toLocaleDateString('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric' }),
+            callback: (value) => formatChartDate(Number(value)),
           },
         },
       },
     },
   });
+}
+
+function formatChartDate(timestamp: number): string {
+  return new Date(timestamp).toLocaleDateString('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric' });
 }
 
 function renderWaistSummary(sorted: WeightLog[], ceiling: number | null) {
