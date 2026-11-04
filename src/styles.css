@@ -1210,6 +1210,30 @@ input.searching,
   max-width: 100%;
 }
 
+.weight-trend-summary {
+  background: var(--surface-low);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  margin-bottom: 16px;
+}
+
+.weight-trend-values {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 12px;
+}
+
+.weight-trend-values dt {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+}
+
+.weight-trend-values dd {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
 .chart-container {
   background: var(--surface-card);
   border-radius: var(--radius-xl);
