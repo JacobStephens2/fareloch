@@ -6,6 +6,7 @@ import {
   roundMacros,
   unitScale,
   caloriesFromMacros,
+  mealPulseStatus,
 } from './nutrition';
 
 const oats = { calories: 150, carbs_g: 27, protein_g: 5, fat_g: 2.5 };
@@ -17,6 +18,37 @@ const noManual = {
   manual_protein_g: null,
   manual_fat_g: null,
 };
+
+describe('mealPulseStatus', () => {
+  const target = { calories: 600, carbsG: 75, proteinG: 40, fatG: 20 };
+
+  it('leaves an all-zero meal without a status', () => {
+    expect(mealPulseStatus({ calories: 0, carbsG: 0, proteinG: 0, fatG: 0 }, target)).toBe('');
+  });
+
+  it('is on track when calories and protein both reach 85% of their targets', () => {
+    expect(mealPulseStatus({ calories: 510, carbsG: 60, proteinG: 34, fatG: 16 }, target)).toBe('on-track');
+  });
+
+  it.each([
+    ['high-calorie, low-protein pastry', { calories: 650, carbsG: 100, proteinG: 6, fatG: 25 }],
+    ['lean protein-pulse snack', { calories: 200, carbsG: 12, proteinG: 34, fatG: 2 }],
+    ['50% of calories only', { calories: 300, carbsG: 60, proteinG: 0, fatG: 6 }],
+    ['50% of protein only', { calories: 80, carbsG: 0, proteinG: 20, fatG: 0 }],
+    ['calories just below 85%', { calories: 509.9, carbsG: 60, proteinG: 40, fatG: 16 }],
+    ['protein just below 85%', { calories: 600, carbsG: 75, proteinG: 33.9, fatG: 20 }],
+  ])('is partial for %s', (_label, logged) => {
+    expect(mealPulseStatus(logged, target)).toBe('partial');
+  });
+
+  it.each([
+    ['both calories and protein just below 50%', { calories: 299.9, carbsG: 30, proteinG: 19.9, fatG: 10 }],
+    ['only carbs logged', { calories: 0, carbsG: 10, proteinG: 0, fatG: 0 }],
+    ['only fat logged', { calories: 0, carbsG: 0, proteinG: 0, fatG: 10 }],
+  ])('is low for %s', (_label, logged) => {
+    expect(mealPulseStatus(logged, target)).toBe('low');
+  });
+});
 
 describe('food x servings', () => {
   it('scales a food and stores it rounded to 0.1', () => {
