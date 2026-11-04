@@ -375,12 +375,12 @@ export const weight = {
       ? localWeight.list(limit)
       : request<{ logs: WeightLog[] }>(`/weight${limit ? `?limit=${limit}` : ''}`),
 
-  log: (date: string, weightLbs: number, time?: string, notes?: string) =>
+  log: (date: string, weightLbs: number, time?: string, notes?: string, waistInches?: number | null) =>
     isGuestMode()
-      ? localWeight.log(date, weightLbs, time, notes)
+      ? localWeight.log(date, weightLbs, time, notes, waistInches)
       : request<{ log: WeightLog }>('/weight', {
           method: 'POST',
-          body: JSON.stringify({ date, weightLbs, time, notes }),
+          body: JSON.stringify({ date, weightLbs, time, notes, waistInches }),
         }),
 
   delete: (id: number) =>

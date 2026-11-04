@@ -1,4 +1,4 @@
-import { weight as weightApi } from '../api';
+import { auth, weight as weightApi } from '../api';
 import { todayStr } from '../state';
 import type { WeightLog } from '../types';
 import { Chart, LineController, LineElement, PointElement, LinearScale, CategoryScale, Tooltip, Filler } from 'chart.js';
@@ -30,9 +30,26 @@ export function weightView() {
             <label for="weight-lbs">Weight (lbs)</label>
             <input type="number" id="weight-lbs" step="0.1" min="50" max="500" required />
           </div>
+          <div class="form-group">
+            <label for="weight-waist">Waist (in) <span class="text-muted">(optional)</span></label>
+            <input type="number" id="weight-waist" step="0.1" min="20" max="60" aria-describedby="weight-waist-hint" />
+            <p id="weight-waist-hint" class="form-hint">Measure around your bare-skin navel.</p>
+          </div>
           <button type="submit" class="btn btn-primary btn-block">Log Weight</button>
         </form>
 
+        <form id="waist-ceiling-form" class="weight-form">
+          <h3>Waist-Thermostat</h3>
+          <div class="form-group">
+            <label for="waist-ceiling">Waist ceiling (in) <span class="text-muted">(optional)</span></label>
+            <input type="number" id="waist-ceiling" step="0.01" min="20" max="60" aria-describedby="waist-ceiling-hint" />
+            <p id="waist-ceiling-hint" class="form-hint">Compare your latest navel waist with your ceiling. Clear and save to disable.</p>
+          </div>
+          <button type="submit" class="btn btn-primary btn-block">Save Ceiling</button>
+          <p id="waist-ceiling-message" class="form-hint" role="status"></p>
+        </form>
+
+        <p id="waist-summary" class="waist-summary" role="status" hidden></p>
         <div class="chart-container">
           <canvas id="weight-chart"></canvas>
         </div>
@@ -48,18 +65,38 @@ export function weightView() {
         const date = (document.getElementById('weight-date') as HTMLInputElement).value;
         const time = (document.getElementById('weight-time') as HTMLInputElement).value;
         const lbs = parseFloat((document.getElementById('weight-lbs') as HTMLInputElement).value);
+        const waistInput = document.getElementById('weight-waist') as HTMLInputElement;
+        const waistInches = waistInput.value === '' ? null : waistInput.valueAsNumber;
         if (!date || !lbs) return;
 
         const btn = (e.target as HTMLFormElement).querySelector('button') as HTMLButtonElement;
         btn.disabled = true;
         try {
-          await weightApi.log(date, lbs, time);
+          await weightApi.log(date, lbs, time, undefined, waistInches);
           (document.getElementById('weight-lbs') as HTMLInputElement).value = '';
-          loadWeightData();
+          waistInput.value = '';
+          await loadWeightData();
         } catch {
           alert('Failed to log weight');
         }
         btn.disabled = false;
+      });
+
+      document.getElementById('waist-ceiling-form')!.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const input = document.getElementById('waist-ceiling') as HTMLInputElement;
+        const targetWaistInches = input.value === '' ? null : input.valueAsNumber;
+        const button = (e.target as HTMLFormElement).querySelector('button')!;
+        const message = document.getElementById('waist-ceiling-message')!;
+        button.disabled = true;
+        try {
+          await auth.updateProfile({ targetWaistInches });
+          await loadWeightData();
+          message.textContent = targetWaistInches == null ? 'Ceiling disabled.' : 'Ceiling saved.';
+        } catch {
+          message.textContent = 'Failed to save waist ceiling.';
+        }
+        button.disabled = false;
       });
 
       loadWeightData();
@@ -69,8 +106,10 @@ export function weightView() {
 
 async function loadWeightData() {
   try {
-    const { logs } = await weightApi.list(90);
-    renderChart(logs);
+    const [{ logs }, { user }] = await Promise.all([weightApi.list(90), auth.me()]);
+    const ceiling = document.getElementById('waist-ceiling') as HTMLInputElement | null;
+    if (ceiling) ceiling.value = user.targetWaistInches?.toString() ?? '';
+    renderChart(logs, user.targetWaistInches);
     renderHistory(logs);
   } catch {
     const container = document.getElementById('weight-history');
@@ -78,7 +117,7 @@ async function loadWeightData() {
   }
 }
 
-function renderChart(logs: WeightLog[]) {
+function renderChart(logs: WeightLog[], targetWaistInches: number | null) {
   const canvas = document.getElementById('weight-chart') as HTMLCanvasElement;
   if (!canvas) return;
 
@@ -88,6 +127,7 @@ function renderChart(logs: WeightLog[]) {
     if (cmp !== 0) return cmp;
     return (a.time || '').localeCompare(b.time || '');
   });
+  renderWaistSummary(sorted, targetWaistInches);
   const labels = sorted.map((l) => {
     const d = new Date(l.date + 'T12:00:00');
     const dateStr = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
@@ -142,6 +182,21 @@ function renderChart(logs: WeightLog[]) {
   });
 }
 
+function renderWaistSummary(sorted: WeightLog[], ceiling: number | null) {
+  const summary = document.getElementById('waist-summary');
+  if (!summary) return;
+  const latest = sorted.filter((log) => log.waist_inches != null).pop();
+  const aboveCeiling = latest?.waist_inches != null && ceiling != null && latest.waist_inches > ceiling;
+  summary.classList.toggle('above-ceiling', aboveCeiling);
+  if (latest) {
+    const comparison = ceiling == null ? '' : ` Waist-Thermostat: ${aboveCeiling ? 'Above ceiling' : 'At or below ceiling'} (${ceiling}").`;
+    summary.textContent = `Latest waist: ${latest.waist_inches}" (${latest.date}${latest.time ? ` ${latest.time}` : ''}).${comparison}`;
+  } else {
+    summary.textContent = ceiling == null ? '' : `Waist-Thermostat: ceiling ${ceiling}". Log a waist measurement to compare.`;
+  }
+  summary.hidden = summary.textContent === '';
+}
+
 function renderHistory(logs: WeightLog[]) {
   const container = document.getElementById('weight-history');
   if (!container) return;
@@ -159,7 +214,7 @@ function renderHistory(logs: WeightLog[]) {
     html += `
       <div class="weight-entry">
         <span class="weight-date">${dateStr}${timeStr}</span>
-        <span class="weight-value">${log.weight_lbs} lbs</span>
+        <span class="weight-value">${log.weight_lbs} lbs${log.waist_inches != null ? ` <span class="weight-waist">Waist ${log.waist_inches}&quot;</span>` : ''}</span>
         <button class="btn-icon btn-delete-weight" data-id="${log.id}">&times;</button>
       </div>
     `;

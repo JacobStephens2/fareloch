@@ -5,6 +5,7 @@ export interface User {
   emailVerified: boolean;
   heightInches: number;
   currentWeightLbs: number;
+  targetWaistInches: number | null;
   targetCalories: number;
   targetCarbsG: number;
   targetProteinG: number;
@@ -122,5 +123,6 @@ export interface WeightLog {
   date: string;
   time: string;
   weight_lbs: number;
+  waist_inches: number | null;
   notes: string | null;
 }
