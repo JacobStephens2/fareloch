@@ -118,6 +118,14 @@ export interface RecipeIngredient {
   measures: string | null;
 }
 
+export interface WeightLogInput {
+  date: string;
+  weightLbs: number;
+  time?: string;
+  notes?: string;
+  waistInches?: number | null;
+}
+
 export interface WeightLog {
   id: number;
   date: string;

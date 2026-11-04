@@ -43,10 +43,10 @@ it('logs an optional navel waist through the form and displays it alongside weig
 });
 
 it('shows the latest measured waist above the chart even when newer entries have only weight', async () => {
-  await weight.log('2026-11-02', 164, '07:00', undefined, 30.6);
-  await weight.log('2026-11-03', 165, '18:00', undefined, 30.8);
-  await weight.log('2026-11-03', 165, '07:00', undefined, 30.7);
-  await weight.log('2026-11-04', 166);
+  await weight.log({ date: '2026-11-02', weightLbs: 164, time: '07:00', waistInches: 30.6 });
+  await weight.log({ date: '2026-11-03', weightLbs: 165, time: '18:00', waistInches: 30.8 });
+  await weight.log({ date: '2026-11-03', weightLbs: 165, time: '07:00', waistInches: 30.7 });
+  await weight.log({ date: '2026-11-04', weightLbs: 166 });
   await showWeight();
   const summary = document.querySelector('#waist-summary');
   expect(summary?.textContent).toContain('Latest waist: 30.8"');
@@ -60,7 +60,7 @@ it.each([
   [31.3, 'Above ceiling'],
 ])('compares the latest waist %s with the saved ceiling', async (waistInches, status) => {
   await auth.updateProfile({ targetWaistInches: 31.25 });
-  await weight.log('2026-11-04', 165, '', undefined, waistInches);
+  await weight.log({ date: '2026-11-04', weightLbs: 165, waistInches });
   await showWeight();
   expect(document.querySelector('#waist-summary')?.textContent).toContain(status);
   expect(document.querySelector('#waist-summary')?.textContent).toContain('31.25"');

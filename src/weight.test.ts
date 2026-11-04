@@ -8,13 +8,13 @@ beforeEach(() => {
 });
 
 it('stores and updates optional waist measurements in guest mode', async () => {
-  const { log } = await weight.log('2026-11-04', 165, '07:30', undefined, 30.8);
+  const { log } = await weight.log({ date: '2026-11-04', weightLbs: 165, time: '07:30', waistInches: 30.8 });
   expect(log).toMatchObject({ weight_lbs: 165, waist_inches: 30.8 });
-  await weight.log('2026-11-04', 166, '07:30', undefined, 31.2);
+  await weight.log({ date: '2026-11-04', weightLbs: 166, time: '07:30', waistInches: 31.2 });
   expect((await weight.list()).logs).toEqual([
     expect.objectContaining({ id: log.id, weight_lbs: 166, waist_inches: 31.2 }),
   ]);
-  await weight.log('2026-11-04', 166, '07:30');
+  await weight.log({ date: '2026-11-04', weightLbs: 166, time: '07:30' });
   expect((await weight.list()).logs[0].waist_inches).toBeNull();
 });
 
@@ -28,7 +28,7 @@ it('reads guest weight records saved before waist measurements existed', async (
 });
 
 it.each([NaN, Infinity, 19.9, 60.1])('rejects invalid guest waist measurements: %s', async (waistInches) => {
-  await expect(weight.log('2026-11-04', 165, '', undefined, waistInches)).rejects.toThrow('Waist');
+  await expect(weight.log({ date: '2026-11-04', weightLbs: 165, waistInches })).rejects.toThrow('Waist');
   expect((await weight.list()).logs).toEqual([]);
 });
 

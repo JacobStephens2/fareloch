@@ -1,4 +1,4 @@
-import type { User, Food, ExternalFood, MealLog, Recipe, RecipeIngredient, WeightLog } from './types';
+import type { User, Food, ExternalFood, MealLog, Recipe, RecipeIngredient, WeightLog, WeightLogInput } from './types';
 import { type IngredientRow, type Macros, macrosOf, scaleMacros, recipePerServing, roundMacros } from '../server/src/nutrition';
 import { isWaistInches } from '../server/src/waist';
 
@@ -645,7 +645,7 @@ export const localWeight = {
     return { logs };
   },
 
-  log: async (date: string, weightLbs: number, time?: string, notes?: string, waistInches?: number | null): Promise<{ log: WeightLog }> => {
+  log: async ({ date, weightLbs, time, notes, waistInches }: WeightLogInput): Promise<{ log: WeightLog }> => {
     if (waistInches != null && !isWaistInches(waistInches)) {
       throw new Error('Waist must be a number between 20 and 60 inches');
     }

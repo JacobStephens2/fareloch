@@ -72,7 +72,7 @@ export function weightView() {
         const btn = (e.target as HTMLFormElement).querySelector('button') as HTMLButtonElement;
         btn.disabled = true;
         try {
-          await weightApi.log(date, lbs, time, undefined, waistInches);
+          await weightApi.log({ date, weightLbs: lbs, time, waistInches });
           (document.getElementById('weight-lbs') as HTMLInputElement).value = '';
           waistInput.value = '';
           await loadWeightData();

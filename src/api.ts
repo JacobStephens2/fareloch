@@ -1,4 +1,4 @@
-import type { User, Food, ExternalFood, MealLog, Recipe, RecipeIngredient, WeightLog } from './types';
+import type { User, Food, ExternalFood, MealLog, Recipe, RecipeIngredient, WeightLog, WeightLogInput } from './types';
 import {
   isGuestMode,
   clearGuestData,
@@ -375,12 +375,12 @@ export const weight = {
       ? localWeight.list(limit)
       : request<{ logs: WeightLog[] }>(`/weight${limit ? `?limit=${limit}` : ''}`),
 
-  log: (date: string, weightLbs: number, time?: string, notes?: string, waistInches?: number | null) =>
+  log: (entry: WeightLogInput) =>
     isGuestMode()
-      ? localWeight.log(date, weightLbs, time, notes, waistInches)
+      ? localWeight.log(entry)
       : request<{ log: WeightLog }>('/weight', {
           method: 'POST',
-          body: JSON.stringify({ date, weightLbs, time, notes, waistInches }),
+          body: JSON.stringify(entry),
         }),
 
   delete: (id: number) =>
