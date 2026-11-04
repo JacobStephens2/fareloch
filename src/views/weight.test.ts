@@ -94,3 +94,58 @@ it('keeps waist optional for weight-only form submissions and shows no invented 
   expect(document.querySelector('.weight-waist')).toBeNull();
   expect(document.querySelector<HTMLElement>('#waist-summary')!.hidden).toBe(true);
 });
+
+it('shows the daily-weighted trend above the chart while retaining every raw reading', async () => {
+  await weight.log({ date: '2026-11-03', weightLbs: 160 });
+  await weight.log({ date: '2026-11-04', weightLbs: 164, time: '07:00' });
+  await weight.log({ date: '2026-11-04', weightLbs: 168, time: '18:00' });
+  await showWeight();
+  const summary = document.querySelector('#weight-trend-summary');
+  expect(summary?.textContent).toContain('7-Day Trend');
+  expect(summary?.textContent).toContain('163.0 lbs');
+  expect(summary?.textContent).toContain('Weekly Change');
+  expect(summary?.textContent).toContain('Need 7+ days of logs');
+  expect(summary!.compareDocumentPosition(document.querySelector('#weight-chart')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+  const canvas = document.querySelector<HTMLCanvasElement>('#weight-chart')!;
+  const chart = Chart.getChart(canvas)!;
+  expect(chart.data.datasets).toHaveLength(2);
+  expect(chart.data.datasets[0].data).toEqual([
+    { x: Date.parse('2026-11-03T12:00:00Z'), y: 160 },
+    { x: Date.parse('2026-11-04T07:00:00Z'), y: 164 },
+    { x: Date.parse('2026-11-04T18:00:00Z'), y: 168 },
+  ]);
+  expect(chart.data.datasets[1].data).toEqual([
+    { x: Date.parse('2026-11-03T12:00:00Z'), y: 160 },
+    { x: Date.parse('2026-11-04T12:00:00Z'), y: 163 },
+  ]);
+  expect(chart.data.datasets[1]).toMatchObject({ label: '7-Day Trend (lbs)', pointRadius: 0, fill: false });
+});
+
+it.each([
+  [165.3, '+0.30 lbs/wk'],
+  [164.7, '-0.30 lbs/wk'],
+  [165, '+0.00 lbs/wk'],
+])('shows a signed weekly change for a current trend of %s lbs', async (current, text) => {
+  for (let index = 0; index < 14; index++) {
+    const date = new Date(Date.UTC(2026, 9, 22 + index)).toISOString().slice(0, 10);
+    await weight.log({ date, weightLbs: index < 7 ? 165 : current });
+  }
+  await showWeight();
+  expect(document.querySelector('#weight-trend-value')?.textContent).toBe(`${current.toFixed(1)} lbs`);
+  expect(document.querySelector('#weight-weekly-change')?.textContent).toBe(text);
+  expect(document.querySelector('#weight-trend-as-of')?.textContent).toBe('As of 2026-11-04');
+});
+
+it('refreshes the trend after saving and deleting a weight entry, including the empty state', async () => {
+  await showWeight();
+  expect(document.querySelector('#weight-trend-value')?.textContent).toBe('No logs yet');
+  expect(document.querySelector('#weight-weekly-change')?.textContent).toBe('Need 7+ days of logs');
+  document.querySelector<HTMLInputElement>('#weight-lbs')!.value = '165';
+  document.querySelector('#weight-form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  await vi.waitFor(() => expect(document.querySelector('#weight-trend-value')?.textContent).toBe('165.0 lbs'));
+  vi.stubGlobal('confirm', () => true);
+  document.querySelector<HTMLButtonElement>('.btn-delete-weight')!.click();
+  await vi.waitFor(() => expect(document.querySelector('#weight-trend-value')?.textContent).toBe('No logs yet'));
+  expect(Chart.getChart(document.querySelector<HTMLCanvasElement>('#weight-chart')!)!.data.datasets[1].data).toEqual([]);
+});

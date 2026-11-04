@@ -1,9 +1,10 @@
 import { auth, weight as weightApi } from '../api';
 import { todayStr } from '../state';
 import type { WeightLog } from '../types';
-import { Chart, LineController, LineElement, PointElement, LinearScale, CategoryScale, Tooltip, Filler } from 'chart.js';
+import { calculateWeightTrend } from '../../server/src/weight-trend';
+import { Chart, LineController, LineElement, PointElement, LinearScale, Tooltip, Filler, Legend } from 'chart.js';
 
-Chart.register(LineController, LineElement, PointElement, LinearScale, CategoryScale, Tooltip, Filler);
+Chart.register(LineController, LineElement, PointElement, LinearScale, Tooltip, Filler, Legend);
 
 let chartInstance: Chart | null = null;
 
@@ -50,6 +51,19 @@ export function weightView() {
         </form>
 
         <p id="waist-summary" class="waist-summary" role="status" hidden></p>
+        <div id="weight-trend-summary" class="weight-trend-summary" role="status">
+          <dl class="weight-trend-values">
+            <div>
+              <dt>7-Day Trend</dt>
+              <dd id="weight-trend-value">Loading...</dd>
+            </div>
+            <div>
+              <dt>Weekly Change</dt>
+              <dd id="weight-weekly-change">Loading...</dd>
+            </div>
+          </dl>
+          <p id="weight-trend-as-of" class="form-hint"></p>
+        </div>
         <div class="chart-container">
           <canvas id="weight-chart"></canvas>
         </div>
@@ -128,19 +142,29 @@ function renderChart(logs: WeightLog[], targetWaistInches: number | null) {
     return (a.time || '').localeCompare(b.time || '');
   });
   renderWaistSummary(sorted, targetWaistInches);
-  const labels = sorted.map((l) => {
-    const d = new Date(l.date + 'T12:00:00');
-    const dateStr = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-    return l.time ? `${dateStr} ${l.time}` : dateStr;
-  });
-  const data = sorted.map((l) => l.weight_lbs);
+  const trend = calculateWeightTrend(sorted);
+  const trendValue = document.getElementById('weight-trend-value');
+  const weeklyChange = document.getElementById('weight-weekly-change');
+  const asOf = document.getElementById('weight-trend-as-of');
+  if (trendValue) trendValue.textContent = trend.currentMeanLbs == null ? 'No logs yet' : `${trend.currentMeanLbs.toFixed(1)} lbs`;
+  if (weeklyChange) {
+    const delta = trend.weeklyChangeLbs;
+    weeklyChange.textContent = delta == null ? 'Need 7+ days of logs' : `${delta >= 0 ? '+' : ''}${delta.toFixed(2)} lbs/wk`;
+  }
+  if (asOf) asOf.textContent = sorted.length ? `As of ${sorted[sorted.length - 1].date}` : '';
+
+  // Plot entered calendar dates/times in UTC so timezone offsets cannot shift
+  // dates, and use a linear axis so missing days retain their actual spacing.
+  const data = sorted.map((log) => ({
+    x: Date.parse(`${log.date}T${log.time || '12:00'}Z`),
+    y: log.weight_lbs,
+  }));
 
   if (chartInstance) chartInstance.destroy();
 
   chartInstance = new Chart(canvas, {
     type: 'line',
     data: {
-      labels,
       datasets: [
         {
           label: 'Weight (lbs)',
@@ -153,6 +177,16 @@ function renderChart(logs: WeightLog[], targetWaistInches: number | null) {
           tension: 0.3,
           fill: true,
         },
+        {
+          label: '7-Day Trend (lbs)',
+          data: trend.points.map((point) => ({ x: Date.parse(`${point.date}T12:00:00Z`), y: point.weightLbs })),
+          borderColor: '#3B82F6',
+          borderWidth: 3,
+          pointRadius: 0,
+          pointHoverRadius: 0,
+          tension: 0,
+          fill: false,
+        },
       ],
     },
     options: {
@@ -161,7 +195,14 @@ function renderChart(logs: WeightLog[], targetWaistInches: number | null) {
       plugins: {
         tooltip: {
           callbacks: {
-            label: (ctx) => `${ctx.parsed.y} lbs`,
+            title: (items) => {
+              const point = items[0];
+              if (point.parsed.x == null) return '';
+              const date = formatChartDate(point.parsed.x);
+              const time = point.datasetIndex === 0 ? sorted[point.dataIndex].time : '';
+              return time ? `${date} ${time}` : date;
+            },
+            label: (ctx) => ctx.parsed.y == null ? '' : `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)} lbs`,
           },
         },
       },
@@ -173,13 +214,19 @@ function renderChart(logs: WeightLog[], targetWaistInches: number | null) {
           },
         },
         x: {
+          type: 'linear',
           ticks: {
             maxTicksLimit: 8,
+            callback: (value) => formatChartDate(Number(value)),
           },
         },
       },
     },
   });
+}
+
+function formatChartDate(timestamp: number): string {
+  return new Date(timestamp).toLocaleDateString('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric' });
 }
 
 function renderWaistSummary(sorted: WeightLog[], ceiling: number | null) {
