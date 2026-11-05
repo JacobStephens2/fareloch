@@ -11,6 +11,7 @@ import mealRoutes from './routes/meals.js';
 import recipeRoutes from './routes/recipes.js';
 import weightRoutes from './routes/weight.js';
 import workoutDayRoutes from './routes/workout-days.js';
+import dailyCheckRoutes from './routes/daily-checks.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = parseInt(process.env.PORT || '3457');
@@ -79,6 +80,7 @@ app.use('/api/meals', mealRoutes);
 app.use('/api/recipes', recipeRoutes);
 app.use('/api/weight', weightRoutes);
 app.use('/api/workout-days', workoutDayRoutes);
+app.use('/api/daily-checks', dailyCheckRoutes);
 
 // Health check
 app.get('/api/health', (_req, res) => {

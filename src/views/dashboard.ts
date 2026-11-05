@@ -4,6 +4,7 @@ import { navigate } from '../router';
 import { isGuestMode, hasSampleData, dismissSampleData } from '../local-db';
 import type { MealLog, MealType } from '../types';
 import { mealPulseStatus } from '../../server/src/nutrition';
+import { mountDailyChecks } from '../components/daily-checks';
 
 function formatDateSub(dateStr: string): string {
   const d = new Date(dateStr + 'T12:00:00');
@@ -75,6 +76,8 @@ export function dashboardView() {
           <input type="checkbox" id="workout-toggle" />
           <span class="workout-toggle-label">Workout day</span>
         </label>
+
+        <div class="daily-checks" id="daily-checks"></div>
 
         <div id="macro-summary" class="macro-summary">
           <div class="macro-ring" data-macro="calories">
@@ -156,6 +159,7 @@ export function dashboardView() {
 
       const toggle = document.getElementById('workout-toggle') as HTMLInputElement;
       const toggleWrap = document.getElementById('workout-toggle-wrap')!;
+      const loadDailyChecks = mountDailyChecks(document.getElementById('daily-checks')!);
 
       const applyWorkoutState = (isWorkout: boolean) => {
         currentIsWorkout = isWorkout;
@@ -182,6 +186,7 @@ export function dashboardView() {
         document.getElementById('date-sub')!.textContent = formatDateSub(state.selectedDate);
         document.getElementById('date-next')!.classList.toggle('invisible', state.selectedDate >= todayStr());
         loadWorkoutDay(state.selectedDate);
+        loadDailyChecks(state.selectedDate);
         loadMeals(state.selectedDate);
       };
 
@@ -258,6 +263,7 @@ export function dashboardView() {
       });
 
       loadWorkoutDay(state.selectedDate);
+      loadDailyChecks(state.selectedDate);
       loadMeals(state.selectedDate);
     },
   };

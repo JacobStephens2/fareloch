@@ -1,6 +1,7 @@
 import type { User, Food, ExternalFood, MealLog, Recipe, RecipeIngredient, WeightLog, WeightLogInput } from './types';
 import { type IngredientRow, type Macros, macrosOf, scaleMacros, recipePerServing, roundMacros } from '../server/src/nutrition';
 import { isWaistInches } from '../server/src/waist';
+import { dailyCheckValidationError, type DailyCheckKey } from '../server/src/daily-checks';
 
 const GUEST_KEY = 'guest_mode';
 const SAMPLE_KEY = 'guest_sample_active';
@@ -23,6 +24,7 @@ export function clearGuestData() {
   localStorage.removeItem('guest_recipe_ingredients');
   localStorage.removeItem('guest_weight');
   localStorage.removeItem('guest_workout_days');
+  localStorage.removeItem('guest_daily_checks');
   localStorage.removeItem('guest_next_id');
   localStorage.removeItem(SAMPLE_KEY);
 }
@@ -670,6 +672,26 @@ export const localWeight = {
     const logs = getStore<WeightLog[]>('guest_weight', []).filter((l) => l.id !== id);
     setStore('guest_weight', logs);
     return { success: true };
+  },
+};
+
+// Daily checks
+export const localDailyChecks = {
+  get: async (date: string): Promise<{ checks: string[] }> => {
+    const days = getStore<Record<string, string[]>>('guest_daily_checks', {});
+    return { checks: days[date] ?? [] };
+  },
+
+  set: async (date: string, key: DailyCheckKey, checked: boolean): Promise<{ checks: string[] }> => {
+    const error = dailyCheckValidationError(key, checked);
+    if (error) throw new Error(error);
+    const days = getStore<Record<string, string[]>>('guest_daily_checks', {});
+    const checks = new Set(days[date] ?? []);
+    if (checked) checks.add(key);
+    else checks.delete(key);
+    days[date] = [...checks].sort();
+    setStore('guest_daily_checks', days);
+    return { checks: days[date] };
   },
 };
 
