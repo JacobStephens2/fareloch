@@ -1,8 +1,10 @@
 import { Chart } from 'chart.js';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { auth, weight } from '../api';
 import { setGuestMode } from '../local-db';
-import { weightView } from './weight';
+import { go, startWeightRoutes } from '../test/weight-fixtures';
+
+beforeAll(startWeightRoutes);
 
 beforeEach(() => {
   localStorage.clear();
@@ -15,15 +17,13 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  go('/other');
   Object.values(Chart.instances).forEach((chart) => chart.destroy());
-  document.body.innerHTML = '';
   vi.unstubAllGlobals();
 });
 
 async function showWeight() {
-  const view = weightView();
-  document.body.innerHTML = view.html;
-  view.init();
+  go('/weight');
   await vi.waitFor(() => expect(document.querySelector('#weight-history .loading-spinner')).toBeNull());
 }
 
@@ -148,4 +148,23 @@ it('refreshes the trend after saving and deleting a weight entry, including the 
   document.querySelector<HTMLButtonElement>('.btn-delete-weight')!.click();
   await vi.waitFor(() => expect(document.querySelector('#weight-trend-value')?.textContent).toBe('No logs yet'));
   expect(Chart.getChart(document.querySelector<HTMLCanvasElement>('#weight-chart')!)!.data.datasets[1].data).toEqual([]);
+});
+
+it('keeps 14 recent entries, all raw readings, and UTC chart axis and tooltip dates', async () => {
+  for (let day = 1; day <= 16; day++) {
+    await weight.log({ date: `2026-10-${String(day).padStart(2, '0')}`, time: day === 1 ? '00:30' : '', weightLbs: 165 });
+  }
+  await showWeight();
+  expect(document.querySelectorAll('.weight-entry')).toHaveLength(14);
+  expect(document.querySelector('.weight-entry')!.textContent).toContain('Oct 16');
+  const chart = Chart.getChart(document.querySelector<HTMLCanvasElement>('canvas')!)!;
+  expect(chart.data.datasets[0].data).toHaveLength(16);
+  const timestamp = Date.parse('2026-10-01T00:30:00Z');
+  expect(chart.data.datasets[0].data[0]).toEqual({ x: timestamp, y: 165 });
+  const x = chart.scales.x;
+  expect(chart.options.scales!.x!.ticks!.callback!.call(x, timestamp, 0, [])).toBe('Oct 1');
+  chart.tooltip!.setActiveElements([{ datasetIndex: 0, index: 0 }], { x: 0, y: 0 });
+  expect(chart.tooltip!.title).toEqual(['Oct 1 00:30']);
+  chart.tooltip!.setActiveElements([{ datasetIndex: 1, index: 0 }], { x: 0, y: 0 });
+  expect(chart.tooltip!.title).toEqual(['Oct 1']);
 });
