@@ -3,6 +3,7 @@ import { state, setState } from '../state';
 import { navigate } from '../router';
 import { isGuestMode, clearGuestData } from '../local-db';
 import { getTheme, setTheme, type ThemePref } from '../theme';
+import { phaseTargetPresets } from '../../server/src/nutrition';
 
 async function downloadCsv(path: string, filename: string) {
   const token = getToken();
@@ -25,6 +26,11 @@ async function downloadCsv(path: string, filename: string) {
 export function settingsView() {
   const user = state.user!;
   const guest = isGuestMode();
+  const phases = [
+    { phase: 'lean-gain', label: 'Lean Gain' },
+    { phase: 'maintenance', label: 'Maintenance' },
+    { phase: 'mini-cut', label: 'Mini-Cut' },
+  ] as const;
 
   const guestBanner = guest
     ? `<div class="settings-section guest-banner">
@@ -109,6 +115,15 @@ export function settingsView() {
             <div id="profile-msg" class="form-success hidden"></div>
             <button type="submit" class="btn btn-primary btn-block">Save Profile</button>
           </form>
+        </div>
+
+        <div class="settings-section">
+          <h3>Phase Presets</h3>
+          <p class="text-muted" style="margin-bottom:12px">Save rest-day and workout-day targets together using your saved weight (160 lbs if unset).</p>
+          <div id="phase-presets" class="phase-presets" role="group" aria-label="Phase Presets">
+            ${phases.map(({ phase, label }) => `<button type="button" id="phase-${phase}" class="btn btn-outline">${label}</button>`).join('')}
+          </div>
+          <div id="phase-presets-msg" class="hidden" role="status"></div>
         </div>
 
         <div class="settings-section">
@@ -204,6 +219,45 @@ export function settingsView() {
           showMsg('profile-msg', err.message, 'error');
         }
       });
+
+      // Phase presets save both days in one profile update.
+      for (const { phase, label } of phases) {
+        document.getElementById(`phase-${phase}`)!.addEventListener('click', async () => {
+          const { rest, workout } = phaseTargetPresets(state.user!.currentWeightLbs, phase);
+          const message = document.getElementById('phase-presets-msg')!;
+          const saveButtons = document.querySelectorAll<HTMLButtonElement>('#phase-presets button, #targets-form button, #workout-targets-form button');
+          saveButtons.forEach(button => { button.disabled = true; });
+          try {
+            const { user: updated } = await auth.updateProfile({
+              targetCalories: rest.calories,
+              targetCarbsG: rest.carbsG,
+              targetProteinG: rest.proteinG,
+              targetFatG: rest.fatG,
+              workoutTargetCalories: workout.calories,
+              workoutTargetCarbsG: workout.carbsG,
+              workoutTargetProteinG: workout.proteinG,
+              workoutTargetFatG: workout.fatG,
+            });
+            setState({ user: updated });
+            if (!message.isConnected) return;
+            for (const [id, value] of [
+              ['s-cal', updated.targetCalories], ['s-carbs', updated.targetCarbsG],
+              ['s-protein', updated.targetProteinG], ['s-fat', updated.targetFatG],
+              ['s-wcal', updated.workoutTargetCalories], ['s-wcarbs', updated.workoutTargetCarbsG],
+              ['s-wprotein', updated.workoutTargetProteinG], ['s-wfat', updated.workoutTargetFatG],
+            ] as const) {
+              (document.getElementById(id) as HTMLInputElement).value = String(value);
+            }
+            showMsg('phase-presets-msg', `${label} targets saved for rest and workout days!`, 'success');
+          } catch (err) {
+            if (message.isConnected) {
+              showMsg('phase-presets-msg', err instanceof Error ? err.message : 'Unable to save phase targets.', 'error');
+            }
+          } finally {
+            saveButtons.forEach(button => { button.disabled = false; });
+          }
+        });
+      }
 
       // Targets form
       document.getElementById('targets-form')!.addEventListener('submit', async (e) => {

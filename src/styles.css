@@ -1320,6 +1320,12 @@ input.searching,
   letter-spacing: -0.01em;
 }
 
+.phase-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .logout-email {
   font-size: 0.9375rem;
   color: var(--text-muted);
