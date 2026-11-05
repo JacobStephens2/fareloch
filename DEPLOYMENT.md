@@ -115,7 +115,7 @@ sudo systemctl restart macros-api
 
 ### Android APK
 
-The web deploy serves from `fareloch.app`, so `API_BASE` defaults to the same-origin `/api`. Native Capacitor defaults to `https://fareloch.app/api`; `VITE_API_BASE` overrides either default. Always build the app with `build:android`, which selects Android mode to omit the PWA service worker and syncs the bundled assets:
+The web deploy serves from `fareloch.app`, so `API_BASE` defaults to the same-origin `/api`. Native Capacitor defaults to `https://fareloch.app/api`; `VITE_API_BASE` overrides either default. Always build the app with `build:android`, which selects Android mode to disable PWA generation and syncs the bundled assets:
 
 ```bash
 npm run build:android   # Android mode + VITE_API_BASE=https://fareloch.app/api + cap sync
@@ -127,6 +127,18 @@ Native startup unregisters leftover service workers and clears CacheStorage from
 older APKs before checking authentication. It preserves localStorage, including
 guest data and login tokens. Web startup registers the PWA worker and retains its
 offline caches.
+
+Android assets include a retirement-only `sw.js` sourced from
+`src/native-worker-retirement.js`. It never caches or handles requests, and fresh
+native installs do not register it. An existing worker can update to this script
+even when its cached HTML prevents the new startup code from running. Activation
+unregisters that worker, clears its caches, and reloads open pages from the APK.
+
+Run `npm run test:android-upgrade` with Chrome installed to check this upgrade
+sequence in a headless browser. Set `CHROME_BIN` to use a specific Chrome or
+Chromium executable. The test preserves origin storage while switching a legacy
+Workbox-cached shell to the current Android assets, then checks cleanup, bundled
+login loading, token preservation, and a second launch without worker registration.
 
 ### Verify
 

@@ -47,7 +47,7 @@ it('builds web PWA and native assets without the test runner installed', async (
       const html = await readFile(join(stage, directory, 'index.html'), 'utf8');
       expect(html).not.toContain('registerSW.js');
       const entries = await readdir(join(stage, directory));
-      expect(entries).not.toContain('sw.js');
+      expect(entries).toContain('sw.js');
       expect(entries).not.toContain('registerSW.js');
       expect(entries.some(name => name.startsWith('workbox-'))).toBe(false);
     }

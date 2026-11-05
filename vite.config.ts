@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
+import { readFileSync } from 'node:fs';
 
 export default defineConfig(({ mode }) => ({
   plugins: [
@@ -49,6 +50,18 @@ export default defineConfig(({ mode }) => ({
         ],
       },
     }),
+    {
+      name: 'retire-native-service-worker',
+      apply: 'build',
+      generateBundle() {
+        if (mode !== 'android') return;
+        this.emitFile({
+          type: 'asset',
+          fileName: 'sw.js',
+          source: readFileSync(new URL('./src/native-worker-retirement.js', import.meta.url), 'utf8'),
+        });
+      },
+    },
   ],
   server: {
     proxy: {
