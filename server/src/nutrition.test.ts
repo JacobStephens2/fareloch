@@ -7,6 +7,7 @@ import {
   unitScale,
   caloriesFromMacros,
   mealPulseStatus,
+  phaseTargetPresets,
 } from './nutrition';
 
 const oats = { calories: 150, carbs_g: 27, protein_g: 5, fat_g: 2.5 };
@@ -18,6 +19,48 @@ const noManual = {
   manual_protein_g: null,
   manual_fat_g: null,
 };
+
+describe('phaseTargetPresets', () => {
+  it.each([
+    ['lean-gain', {
+      rest: { calories: 2600, carbsG: 310, proteinG: 160, fatG: 80 },
+      workout: { calories: 2900, carbsG: 385, proteinG: 160, fatG: 80 },
+    }],
+    ['maintenance', {
+      rest: { calories: 2401, carbsG: 272, proteinG: 155, fatG: 77 },
+      workout: { calories: 2701, carbsG: 347, proteinG: 155, fatG: 77 },
+    }],
+    ['mini-cut', {
+      rest: { calories: 2095, carbsG: 203, proteinG: 170, fatG: 67 },
+      workout: { calories: 2347, carbsG: 266, proteinG: 170, fatG: 67 },
+    }],
+  ] as const)('gives consistent whole-integer targets for %s at 160 lbs', (phase, expected) => {
+    expect(phaseTargetPresets(160, phase)).toEqual(expected);
+  });
+
+  it.each([
+    ['lean-gain', {
+      rest: { calories: 2852, carbsG: 339, proteinG: 176, fatG: 88 },
+      workout: { calories: 3152, carbsG: 414, proteinG: 176, fatG: 88 },
+    }],
+    ['maintenance', {
+      rest: { calories: 2632, carbsG: 299, proteinG: 170, fatG: 84 },
+      workout: { calories: 2932, carbsG: 374, proteinG: 170, fatG: 84 },
+    }],
+    ['mini-cut', {
+      rest: { calories: 2298, carbsG: 222, proteinG: 186, fatG: 74 },
+      workout: { calories: 2550, carbsG: 285, proteinG: 186, fatG: 74 },
+    }],
+  ] as const)('scales %s to a fractional saved weight of 175.5 lbs', (phase, expected) => {
+    expect(phaseTargetPresets(175.5, phase)).toEqual(expected);
+  });
+
+  it.each([undefined, 0, -10, NaN, Infinity])('uses 160 lbs when weight is %s', (weight) => {
+    for (const phase of ['lean-gain', 'maintenance', 'mini-cut'] as const) {
+      expect(phaseTargetPresets(weight!, phase)).toEqual(phaseTargetPresets(160, phase));
+    }
+  });
+});
 
 describe('mealPulseStatus', () => {
   const target = { calories: 600, carbsG: 75, proteinG: 40, fatG: 20 };

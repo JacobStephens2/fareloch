@@ -116,3 +116,23 @@ export function unitScale(gramWeight: number, servingSize: number): number {
 export function caloriesFromMacros(carbsG: number, proteinG: number, fatG: number): number {
   return Math.round(carbsG * 4 + proteinG * 4 + fatG * 9);
 }
+
+export type NutritionPhase = 'lean-gain' | 'maintenance' | 'mini-cut';
+
+export function phaseTargetPresets(weightLbs: number, phase: NutritionPhase): { rest: Macros; workout: Macros } {
+  const weight = Number.isFinite(weightLbs) && weightLbs > 0 ? weightLbs : 160;
+  const formula = {
+    'lean-gain': { caloriesPerLb: 16.25, proteinPerLb: 1, fatPerLb: 0.5, workoutCalories: 300 },
+    maintenance: { caloriesPerLb: 15, proteinPerLb: 0.97, fatPerLb: 0.48, workoutCalories: 300 },
+    'mini-cut': { caloriesPerLb: 13.1, proteinPerLb: 1.06, fatPerLb: 0.42, workoutCalories: 250 },
+  }[phase];
+  const proteinG = Math.round(weight * formula.proteinPerLb);
+  const fatG = Math.round(weight * formula.fatPerLb);
+  const restCalories = weight * formula.caloriesPerLb;
+  const targets = (calories: number): Macros => {
+    // Round grams first, then derive kcal so the saved fields agree exactly.
+    const carbsG = Math.round((calories - proteinG * 4 - fatG * 9) / 4);
+    return { calories: caloriesFromMacros(carbsG, proteinG, fatG), carbsG, proteinG, fatG };
+  };
+  return { rest: targets(restCalories), workout: targets(restCalories + formula.workoutCalories) };
+}
