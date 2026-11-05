@@ -1,3 +1,4 @@
+import { Capacitor } from '@capacitor/core';
 import type { User, Food, ExternalFood, MealLog, Recipe, RecipeIngredient, WeightLog, WeightLogInput } from './types';
 import type { DailyCheckKey } from '../server/src/daily-checks';
 import {
@@ -12,7 +13,8 @@ import {
   localDailyChecks,
 } from './local-db';
 
-export const API_BASE: string = (import.meta.env.VITE_API_BASE as string | undefined) || '/api';
+export const API_BASE: string = import.meta.env.VITE_API_BASE
+  || (Capacitor.isNativePlatform() ? 'https://fareloch.app/api' : '/api');
 
 const TOKEN_KEY = 'mt_token';
 
@@ -38,6 +40,21 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+async function readResponse<T>(res: Response): Promise<T> {
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    throw new Error(`The server returned an unexpected response (HTTP ${res.status}). Please try again.`);
+  }
+  if (!res.ok) {
+    throw new Error(typeof data?.error === 'string' && data.error
+      ? data.error
+      : `Request failed (HTTP ${res.status}). Please try again.`);
+  }
+  return data;
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,
@@ -54,9 +71,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     throw new Error('Not authenticated');
   }
 
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Request failed');
-  return data;
+  return readResponse<T>(res);
 }
 
 // Like request() but doesn't redirect to login on 401 (for endpoints that support optional auth)
@@ -71,9 +86,7 @@ async function requestNoAuthRedirect<T>(path: string, options?: RequestInit): Pr
     credentials: 'include',
   });
 
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Request failed');
-  return data;
+  return readResponse<T>(res);
 }
 
 // Auth
