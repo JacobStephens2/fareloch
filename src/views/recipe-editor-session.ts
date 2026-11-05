@@ -2,7 +2,7 @@ import { recipes as recipesApi, foods as foodsApi } from '../api';
 import { navigate } from '../router';
 import { createFoodSearchSession, type FoodSearchResult } from '../food-search-session';
 import { assignFoodDetailText, assignPerUnitMacros, assignSavedMeasureOptions, assignTotalMacros, macroChips, measureCountSuffix, savedMeasureSuffix, sourceLabel, textSpan } from './food-search-text';
-import type { Food, FoodMeasure, RecipeIngredient } from '../types';
+import type { ExternalFood, Food, FoodMeasure, RecipeIngredient } from '../types';
 import { macrosOf, scaleMacros, recipePerServing, roundMacros, unitScale, caloriesFromMacros } from '../../server/src/nutrition';
 
 
@@ -228,38 +228,36 @@ export function mountRecipeEditor(root: HTMLElement, recipeId: 'new' | number): 
   });
   session.setActive(true);
 
+  function appendIngredientResult(food: Food | ExternalFood, select: () => void) {
+    const detail = 'serving_size' in food ? {
+      serving: `${food.serving_size}${food.serving_unit}${savedMeasureSuffix(food.measures)}`,
+      carbs: food.carbs_g, protein: food.protein_g, fat: food.fat_g,
+    } : {
+      serving: `${food.servingSize}${food.servingUnit}${measureCountSuffix(food.measures?.length ?? 0)}`,
+      carbs: food.carbsG, protein: food.proteinG, fat: food.fatG,
+    };
+    const item = document.createElement('div');
+    item.className = 'food-item food-item-sm';
+    const info = document.createElement('div');
+    info.className = 'food-item-info';
+    const serving = textSpan('food-serving', `${detail.serving} · `);
+    serving.append(sourceLabel(food.source), document.createTextNode(` · ${Math.round(food.calories)} kcal`));
+    info.append(
+      textSpan('food-item-name', `${food.name}${food.brand ? ` (${food.brand})` : ''}`),
+      serving,
+    );
+    item.append(info, macroChips(detail));
+    on(item, 'click', select);
+    results.appendChild(item);
+  }
+
   function renderIngredientResults({ foods, external }: FoodSearchResult) {
     for (const food of foods) {
-      const item = document.createElement('div');
-      item.className = 'food-item food-item-sm';
-      const info = document.createElement('div');
-      info.className = 'food-item-info';
-      const serving = textSpan('food-serving', `${food.serving_size}${food.serving_unit}${savedMeasureSuffix(food.measures)} · `);
-      serving.append(sourceLabel(food.source), document.createTextNode(` · ${Math.round(food.calories)} kcal`));
-      info.append(
-        textSpan('food-item-name', `${food.name}${food.brand ? ` (${food.brand})` : ''}`),
-        serving,
-      );
-      item.append(info, macroChips({ carbs: food.carbs_g, protein: food.protein_g, fat: food.fat_g }));
-      on(item, 'click', () => {
-        showIngredientModal(food);
-      });
-      results.appendChild(item);
+      appendIngredientResult(food, () => showIngredientModal(food));
     }
 
     for (const ext of external) {
-      const serving = textSpan('food-serving', `${ext.servingSize}${ext.servingUnit}${measureCountSuffix(ext.measures?.length ?? 0)} · `);
-      serving.append(sourceLabel(ext.source), document.createTextNode(` · ${Math.round(ext.calories)} kcal`));
-      const info = document.createElement('div');
-      info.className = 'food-item-info';
-      info.append(
-        textSpan('food-item-name', `${ext.name}${ext.brand ? ` (${ext.brand})` : ''}`),
-        serving,
-      );
-      const item = document.createElement('div');
-      item.className = 'food-item food-item-sm';
-      item.append(info, macroChips({ carbs: ext.carbsG, protein: ext.proteinG, fat: ext.fatG }));
-      on(item, 'click', async () => {
+      appendIngredientResult(ext, async () => {
         try {
           const { food } = await foodsApi.saveExternal(ext);
           if (!isLive()) return;
@@ -268,7 +266,6 @@ export function mountRecipeEditor(root: HTMLElement, recipeId: 'new' | number): 
           if (isLive()) alert('Failed to save food');
         }
       });
-      results.appendChild(item);
     }
 
     if (foods.length === 0 && external.length === 0) {

@@ -3,26 +3,8 @@ import { foods, recipes, setToken } from '../api';
 import { setGuestMode } from '../local-db';
 import { route, startRouter } from '../router';
 import { deferred, externalFood, food } from '../test/food-search-fixtures';
+import { change, click, go, submit } from '../test/recipe-editor-fixtures';
 import { recipeEditView } from './recipes';
-
-function go(path: string) {
-  window.history.replaceState(null, '', `#${path}`);
-  window.dispatchEvent(new Event('hashchange'));
-}
-
-function click(selector: string) {
-  document.querySelector<HTMLElement>(selector)!.click();
-}
-
-function change(id: string, value: string) {
-  const el = document.querySelector<HTMLInputElement>(`#${id}`)!;
-  el.value = value;
-  el.dispatchEvent(new Event('input'));
-}
-
-function submit() {
-  document.querySelector('#recipe-form')!.dispatchEvent(new Event('submit', { cancelable: true }));
-}
 
 beforeAll(() => {
   document.body.innerHTML = '<div id="app"></div>';

@@ -2,6 +2,7 @@ import { afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { foods, recipes } from '../api';
 import { route, startRouter } from '../router';
 import { deferred, externalFood, food } from '../test/food-search-fixtures';
+import { change, click, go, submit } from '../test/recipe-editor-fixtures';
 import type { Recipe, RecipeIngredient } from '../types';
 import { recipeEditView } from './recipes';
 
@@ -9,11 +10,6 @@ vi.mock('../api', () => ({
   foods: { search: vi.fn(), saveExternal: vi.fn() },
   recipes: { get: vi.fn(), create: vi.fn(), update: vi.fn(), copy: vi.fn(), delete: vi.fn() },
 }));
-
-function go(path: string) {
-  window.history.replaceState(null, '', `#${path}`);
-  window.dispatchEvent(new Event('hashchange'));
-}
 
 function recipe(id = 1): Recipe {
   return {
@@ -97,20 +93,6 @@ it.each(['2', 'new', '1'])('a late Recipe 1 load cannot hydrate a later %s edito
 
 type Action = 'create' | 'update' | 'copy' | 'delete';
 const actions: Action[] = ['create', 'update', 'copy', 'delete'];
-
-function click(selector: string) {
-  document.querySelector<HTMLElement>(selector)!.click();
-}
-
-function change(id: string, value: string) {
-  const el = input(id);
-  el.value = value;
-  el.dispatchEvent(new Event('input'));
-}
-
-function submit() {
-  document.querySelector('#recipe-form')!.dispatchEvent(new Event('submit', { cancelable: true }));
-}
 
 function act(action: Action) {
   if (action === 'create' || action === 'update') submit();
