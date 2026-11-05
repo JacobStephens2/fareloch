@@ -9,7 +9,7 @@
   </defs>
 
   <!-- Squircle background -->
-  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <rect id="background" width="512" height="512" rx="112" fill="url(#bg)"/>
 
   <!--
     Mark: a bounded still-water loch seen from above.
