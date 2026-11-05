@@ -115,13 +115,18 @@ sudo systemctl restart macros-api
 
 ### Android APK
 
-The web deploy serves from `fareloch.app`, so `API_BASE` defaults to the same-origin `/api`. The Capacitor WebView runs at `https://localhost`, so it needs the absolute API base baked in at build time via `VITE_API_BASE`. Always build the app with `build:android`:
+The web deploy serves from `fareloch.app`, so `API_BASE` defaults to the same-origin `/api`. Native Capacitor defaults to `https://fareloch.app/api`; `VITE_API_BASE` overrides either default. Always build the app with `build:android`, which selects Android mode to omit the PWA service worker and syncs the bundled assets:
 
 ```bash
-npm run build:android   # VITE_API_BASE=https://fareloch.app/api + cap sync
+npm run build:android   # Android mode + VITE_API_BASE=https://fareloch.app/api + cap sync
 cd android && JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ./gradlew assembleRelease
 # signed APK: android/app/build/outputs/apk/release/app-release.apk
 ```
+
+Native startup unregisters leftover service workers and clears CacheStorage from
+older APKs before checking authentication. It preserves localStorage, including
+guest data and login tokens. Web startup registers the PWA worker and retains its
+offline caches.
 
 ### Verify
 

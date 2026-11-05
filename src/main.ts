@@ -1,4 +1,5 @@
 import './styles.css';
+import { Capacitor } from '@capacitor/core';
 import { initTheme } from './theme';
 import { route, startRouter } from './router';
 import { auth } from './api';
@@ -11,6 +12,7 @@ import { recipesView, recipeEditView } from './views/recipes';
 import { weightView } from './views/weight';
 import { settingsView } from './views/settings';
 import { isGuestMode, getGuestUser } from './local-db';
+import { clearNativeWebCaches } from './native-startup';
 
 // Auth guard wrapper
 function requireUser(viewFn: (params: Record<string, string>) => { html: string; init: () => void }) {
@@ -50,6 +52,14 @@ async function init() {
   initTheme();
   const app = document.getElementById('app')!;
   app.innerHTML = '<div class="loading-screen"><img class="logo-icon" src="/logo.svg" alt="Fareloch" /><p>Loading...</p></div>';
+
+  await clearNativeWebCaches();
+  if (import.meta.env.PROD && import.meta.env.MODE !== 'android'
+    && !Capacitor.isNativePlatform() && 'serviceWorker' in navigator) {
+    void navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {
+      console.warn('Offline support could not be enabled.');
+    });
+  }
 
   if (isGuestMode()) {
     const user = getGuestUser();

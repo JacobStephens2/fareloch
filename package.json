@@ -9,7 +9,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json && vite build",
-    "build:android": "VITE_API_BASE=https://fareloch.app/api npm run build && npx cap sync android",
+    "build:android": "VITE_API_BASE=https://fareloch.app/api npm run build -- --mode android && npx cap sync android",
     "generate:icons": "node scripts/generate-icons.mjs",
     "preview": "vite preview"
   },
