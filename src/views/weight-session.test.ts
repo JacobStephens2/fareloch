@@ -4,7 +4,7 @@ import { auth, weight } from '../api';
 import { getGuestUser } from '../local-db';
 import * as router from '../router';
 import { deferred } from '../test/food-search-fixtures';
-import { go, input, reading, ResizeObserverStub, startWeightRoutes, submit, submitReading } from '../test/weight-fixtures';
+import { beginWeightOperation, go, input, reading, ResizeObserverStub, startWeightRoutes, submit, type WeightOperation } from '../test/weight-fixtures';
 
 const settle = () => vi.advanceTimersByTimeAsync(0);
 
@@ -114,23 +114,18 @@ it.each(readCases)('a departed $source $outcome stays silent across $destination
   expect(Chart.getChart(currentCanvas)).toBe(currentChart);
 });
 
-type Operation = 'log' | 'ceiling' | 'delete';
-
-function begin(operation: Operation) {
+function begin(operation: WeightOperation) {
+  beginWeightOperation(operation);
   if (operation === 'log') {
-    submitReading();
     expect(weight.log).toHaveBeenCalledWith({ date: '2026-11-03', time: '18:45', weightLbs: 180, waistInches: 31.2 });
   } else if (operation === 'ceiling') {
-    input('waist-ceiling', '31.25');
-    submit('waist-ceiling-form');
     expect(auth.updateProfile).toHaveBeenCalledWith({ targetWaistInches: 31.25 });
   } else {
-    document.querySelector<HTMLButtonElement>('.btn-delete-weight')!.click();
     expect(weight.delete).toHaveBeenCalledWith(7);
   }
 }
 
-function delayOperation(operation: Operation) {
+function delayOperation(operation: WeightOperation) {
   const pending = deferred<{ log: ReturnType<typeof reading>; user: ReturnType<typeof getGuestUser>; success: boolean }>();
   if (operation === 'log') vi.mocked(weight.log).mockReturnValueOnce(pending.promise);
   else if (operation === 'ceiling') vi.mocked(auth.updateProfile).mockReturnValueOnce(pending.promise);

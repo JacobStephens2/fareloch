@@ -35,6 +35,16 @@ export function submitReading() {
   submit('weight-form');
 }
 
+export type WeightOperation = 'log' | 'ceiling' | 'delete';
+
+export function beginWeightOperation(operation: WeightOperation) {
+  if (operation === 'log') submitReading();
+  else if (operation === 'ceiling') {
+    input('waist-ceiling', '31.25');
+    submit('waist-ceiling-form');
+  } else document.querySelector<HTMLButtonElement>('.btn-delete-weight')!.click();
+}
+
 export class ResizeObserverStub {
   observe() {}
   unobserve() {}

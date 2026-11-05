@@ -3,7 +3,7 @@ import { afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { auth, setToken, weight } from '../api';
 import { getGuestUser, localAuth, localWeight, setGuestMode } from '../local-db';
 import { deferred } from '../test/food-search-fixtures';
-import { go, input, reading, ResizeObserverStub, startWeightRoutes, submit, submitReading } from '../test/weight-fixtures';
+import { beginWeightOperation, go, input, reading, ResizeObserverStub, startWeightRoutes, submit, submitReading } from '../test/weight-fixtures';
 
 const settle = () => vi.advanceTimersByTimeAsync(0);
 
@@ -53,16 +53,6 @@ it('guest Weight persists captured readings, saves and disables the ceiling, and
   expect(network).not.toHaveBeenCalled();
 });
 
-type Operation = 'log' | 'ceiling' | 'delete';
-
-function begin(operation: Operation) {
-  if (operation === 'log') submitReading();
-  else if (operation === 'ceiling') {
-    input('waist-ceiling', '31.25');
-    submit('waist-ceiling-form');
-  } else document.querySelector<HTMLButtonElement>('.btn-delete-weight')!.click();
-}
-
 it.each(['log', 'ceiling', 'delete'] as const)('guest %s remains persisted when result delivery outlives its mount', async operation => {
   await weight.log({ date: '2026-11-04', weightLbs: 165 });
   go('/weight');
@@ -86,7 +76,7 @@ it.each(['log', 'ceiling', 'delete'] as const)('guest %s remains persisted when 
     await delivery.promise;
     return result;
   });
-  begin(operation);
+  beginWeightOperation(operation);
   await settle();
   const root = document.querySelector('.page')!;
   go('/weight');
@@ -144,7 +134,7 @@ it.each(httpCases)('signed-in $operation preserves its HTTP inputs and consumes 
   vi.stubGlobal('fetch', network);
   go('/weight');
   await settle();
-  begin(operation);
+  beginWeightOperation(operation);
   const expected = operation === 'log'
     ? { path: '/weight', method: 'POST', body: { date: '2026-11-03', time: '18:45', weightLbs: 180, waistInches: 31.2 } }
     : operation === 'ceiling'
