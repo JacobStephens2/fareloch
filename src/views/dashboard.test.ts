@@ -343,6 +343,19 @@ it.each(['food', 'quick'] as const)('preserves the %s edit payload and refreshes
   expect(document.querySelector('.meal-item-name')!.textContent).toContain('Saved');
 });
 
+it.each(['food', 'quick'] as const)('allows the current %s form to retry a failed save', async kind => {
+  await openEditMealModal(meal({ food_id: kind === 'food' ? 1 : null }));
+  vi.mocked(meals.update).mockRejectedValueOnce(new Error('save failed'));
+  button('edit-save-btn').click();
+  await settle();
+  expect(button('edit-save-btn').disabled).toBe(false);
+  expect(button('edit-save-btn').textContent).toBe('Failed - Retry');
+  expect(document.querySelector('#edit-meal-modal')!.classList.contains('hidden')).toBe(false);
+  button('edit-save-btn').click();
+  await settle();
+  expect(document.querySelector('#edit-meal-modal')!.classList.contains('hidden')).toBe(true);
+});
+
 it.each(['food', 'quick', 'delete'] as const)('%s completion cannot change a later selection or modal', async action => {
   for (const how of ['date', 'return', 'remount'] as const) {
     for (const outcome of ['success', 'failure']) {

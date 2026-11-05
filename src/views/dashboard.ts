@@ -635,6 +635,7 @@ function mountDashboardDateSession(root: HTMLElement, initialDate: string) {
 
     const body = find('edit-meal-body')!;
     const hasFoodRef = meal.food_id || meal.recipe_id;
+    let readEdit: () => Parameters<typeof mealsApi.update>[1];
 
     // For food/recipe-based entries, show per-unit macros and servings control
     // For quick entries, show editable macro fields
@@ -712,31 +713,19 @@ function mountDashboardDateSession(root: HTMLElement, initialDate: string) {
         updateTotal();
       });
 
-      find('edit-save-btn')!.addEventListener('click', async () => {
-        if (!isCurrent() || !servingsInput.isConnected) return;
+      readEdit = () => {
         const qty = parseFloat(servingsInput.value) || 1;
         const effectiveServings = qty * scale;
         const mealType = (find('edit-meal-type') as HTMLSelectElement).value;
-        const btn = find('edit-save-btn') as HTMLButtonElement;
-        btn.disabled = true;
-        try {
-          await mealsApi.update(meal.id, {
-            servings: effectiveServings,
-            mealType,
-            calories: Math.round(perUnitCal * qty * 10) / 10,
-            carbsG: Math.round(perUnitC * qty * 10) / 10,
-            proteinG: Math.round(perUnitP * qty * 10) / 10,
-            fatG: Math.round(perUnitF * qty * 10) / 10,
-          });
-          if (!isCurrent()) return;
-          if (btn.isConnected) modal.classList.add('hidden');
-          void refreshMeals(date);
-        } catch {
-          if (!isCurrent() || !btn.isConnected) return;
-          btn.disabled = false;
-          btn.textContent = 'Failed - Retry';
-        }
-      });
+        return {
+          servings: effectiveServings,
+          mealType,
+          calories: Math.round(perUnitCal * qty * 10) / 10,
+          carbsG: Math.round(perUnitC * qty * 10) / 10,
+          proteinG: Math.round(perUnitP * qty * 10) / 10,
+          fatG: Math.round(perUnitF * qty * 10) / 10,
+        };
+      };
     } else {
       // Quick entry — editable macros
       body.innerHTML = `
@@ -773,28 +762,31 @@ function mountDashboardDateSession(root: HTMLElement, initialDate: string) {
         </div>
       `;
 
-      find('edit-save-btn')!.addEventListener('click', async () => {
-        if (!isCurrent()) return;
-        const btn = find('edit-save-btn') as HTMLButtonElement;
-        btn.disabled = true;
-        try {
-          await mealsApi.update(meal.id, {
-            mealType: (find('edit-meal-type') as HTMLSelectElement).value,
-            calories: parseFloat((find('edit-cal') as HTMLInputElement).value) || 0,
-            carbsG: parseFloat((find('edit-carbs') as HTMLInputElement).value) || 0,
-            proteinG: parseFloat((find('edit-protein') as HTMLInputElement).value) || 0,
-            fatG: parseFloat((find('edit-fat') as HTMLInputElement).value) || 0,
-          });
-          if (!isCurrent()) return;
-          if (btn.isConnected) modal.classList.add('hidden');
-          void refreshMeals(date);
-        } catch {
-          if (!isCurrent() || !btn.isConnected) return;
-          btn.disabled = false;
-          btn.textContent = 'Failed - Retry';
-        }
+      readEdit = () => ({
+        mealType: (find('edit-meal-type') as HTMLSelectElement).value,
+        calories: parseFloat((find('edit-cal') as HTMLInputElement).value) || 0,
+        carbsG: parseFloat((find('edit-carbs') as HTMLInputElement).value) || 0,
+        proteinG: parseFloat((find('edit-protein') as HTMLInputElement).value) || 0,
+        fatG: parseFloat((find('edit-fat') as HTMLInputElement).value) || 0,
       });
     }
+
+    const saveButton = find<HTMLButtonElement>('edit-save-btn');
+    saveButton.addEventListener('click', async () => {
+      if (!isCurrent() || !saveButton.isConnected || saveButton.disabled) return;
+      const payload = readEdit();
+      saveButton.disabled = true;
+      try {
+        await mealsApi.update(meal.id, payload);
+        if (!isCurrent()) return;
+        if (saveButton.isConnected) modal.classList.add('hidden');
+        void refreshMeals(date);
+      } catch {
+        if (!isCurrent() || !saveButton.isConnected) return;
+        saveButton.disabled = false;
+        saveButton.textContent = 'Failed - Retry';
+      }
+    });
 
     // Delete button (shared)
     const deleteButton = find('edit-delete-btn')!;
