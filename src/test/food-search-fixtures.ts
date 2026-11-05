@@ -1,4 +1,4 @@
-import type { Food } from '../types';
+import type { ExternalFood, Food } from '../types';
 
 export function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -19,4 +19,12 @@ export function food(name: string): Food {
 
 export function result(name: string) {
   return { foods: [food(name)], external: [] };
+}
+
+export function externalFood(name: string): ExternalFood {
+  return {
+    name, brand: null, barcode: null, servingSize: 100, servingUnit: 'g',
+    calories: 100, carbsG: 10, proteinG: 5, fatG: 4, fiberG: 0, sugarG: 0,
+    source: 'usda', sourceId: '123', measures: [{ label: 'cup', gramWeight: 200 }],
+  };
 }
