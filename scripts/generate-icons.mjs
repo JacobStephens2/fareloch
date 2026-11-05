@@ -12,8 +12,17 @@ const root = path.resolve(__dirname, '..');
 const svgPath = path.join(root, 'public', 'logo.svg');
 const svg = fs.readFileSync(svgPath);
 
-async function writePng(outPath, size, { flatten = null } = {}) {
-  let pipeline = sharp(svg, { density: 384 }).resize(size, size, {
+// Keep the same mark as the web icon, hiding only its named background.
+// A 76dp logo box on a 108dp layer puts the shore and dots within the central
+// 66dp safe circle, with transparent overscan for launcher masks and motion.
+const adaptiveSvg = Buffer.from(`
+<svg xmlns="http://www.w3.org/2000/svg" width="108" height="108" viewBox="0 0 108 108">
+  <style>#background { display: none; }</style>
+  <g transform="translate(16 16) scale(${76 / 512})">${svg}</g>
+</svg>`);
+
+async function writePng(outPath, size, { flatten = null, source = svg } = {}) {
+  let pipeline = sharp(source, { density: 384 }).resize(size, size, {
     fit: 'contain',
     background: { r: 0, g: 0, b: 0, alpha: 0 },
   });
@@ -86,10 +95,8 @@ async function main() {
     fs.mkdirSync(dir, { recursive: true });
     await writePng(path.join(dir, 'ic_launcher.png'), size);
     await writePng(path.join(dir, 'ic_launcher_round.png'), size);
-    // Adaptive-icon foreground: full-bleed mark on transparent; system masks it.
-    // Use a slightly larger canvas-safe version (same art, no extra padding needed
-    // because the SVG already has generous margin inside the squircle).
-    await writePng(path.join(dir, 'ic_launcher_foreground.png'), size);
+    // Adaptive layers are 108dp, while the legacy launcher icons are 48dp.
+    await writePng(path.join(dir, 'ic_launcher_foreground.png'), size * 108 / 48, { source: adaptiveSvg });
   }
 
   // TWA bubblewrap mipmaps
