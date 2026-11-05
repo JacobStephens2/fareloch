@@ -1,0 +1,336 @@
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
+import { auth } from '../api';
+import { localAuth, setGuestMode } from '../local-db';
+import { route, startRouter } from '../router';
+import * as router from '../router';
+import { state } from '../state';
+import type { User } from '../types';
+import { deferred } from '../test/food-search-fixtures';
+import { settingsView } from './settings';
+
+const settle = () => vi.advanceTimersByTimeAsync(0);
+
+function go(path: string) {
+  window.history.replaceState(null, '', `#${path}`);
+  window.dispatchEvent(new Event('hashchange'));
+}
+
+function input(id: string, value: string, root: ParentNode = document) {
+  root.querySelector<HTMLInputElement>(`#${id}`)!.value = value;
+}
+
+function submit(id: string, root: ParentNode = document) {
+  root.querySelector(`#${id}`)!.dispatchEvent(new Event('submit', { cancelable: true }));
+}
+
+beforeAll(() => {
+  document.body.innerHTML = '<div id="app"></div>';
+  window.history.replaceState(null, '', '#/other');
+  route('/settings', settingsView);
+  route('/other', () => ({ html: '<p>Other screen</p>', init() {} }));
+  startRouter();
+});
+
+beforeEach(async () => {
+  localStorage.clear();
+  setGuestMode(true);
+  state.user = (await auth.updateProfile({ currentWeightLbs: 200 })).user;
+  setGuestMode(false);
+  vi.useFakeTimers();
+});
+
+afterEach(() => {
+  go('/other');
+  state.user = null;
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
+
+it('a departed target save publishes user state without showing feedback on a replacement Settings mount', async () => {
+  const pending = deferred<Response>();
+  vi.stubGlobal('fetch', vi.fn(() => pending.promise));
+  go('/settings');
+  input('s-cal', '2100');
+  submit('targets-form');
+  const saved = { ...state.user!, targetCalories: 2100 };
+  go('/other');
+  go('/settings');
+  input('s-cal', '2400');
+  pending.resolve(new Response(JSON.stringify({ user: saved })));
+  await settle();
+  expect(state.user).toEqual(saved);
+  expect(document.querySelector('#targets-msg')!.classList.contains('hidden')).toBe(true);
+  expect(document.querySelector<HTMLInputElement>('#s-cal')!.value).toBe('2400');
+});
+
+const flows = [
+  { name: 'profile', form: 'profile-form', message: 'profile-msg', success: 'Profile saved!',
+    inputs: { 's-name': 'Alex', 's-height-ft': '5', 's-height-in': '11' },
+    payload: { firstName: 'Alex', heightInches: 71 } },
+  { name: 'rest targets', form: 'targets-form', message: 'targets-msg', success: 'Targets saved!',
+    inputs: { 's-cal': '2100', 's-carbs': '200', 's-protein': '160', 's-fat': '70' },
+    payload: { targetCalories: 2100, targetCarbsG: 200, targetProteinG: 160, targetFatG: 70 } },
+  { name: 'workout targets', form: 'workout-targets-form', message: 'workout-targets-msg', success: 'Workout targets saved!',
+    inputs: { 's-wcal': '2450', 's-wcarbs': '280', 's-wprotein': '175', 's-wfat': '75' },
+    payload: { workoutTargetCalories: 2450, workoutTargetCarbsG: 280, workoutTargetProteinG: 175, workoutTargetFatG: 75 } },
+  { name: 'preset', form: null, message: 'phase-presets-msg', success: 'Maintenance targets saved for rest and workout days!',
+    inputs: {},
+    payload: { targetCalories: 3000, targetCarbsG: 340, targetProteinG: 194, targetFatG: 96,
+      workoutTargetCalories: 3300, workoutTargetCarbsG: 415, workoutTargetProteinG: 194, workoutTargetFatG: 96 } },
+] satisfies { name: string; form: string | null; message: string; success: string; inputs: Record<string, string>; payload: Partial<User> }[];
+
+function begin(flow: typeof flows[number], root: ParentNode = document) {
+  for (const [id, value] of Object.entries(flow.inputs)) input(id, value!, root);
+  if (flow.form) submit(flow.form, root);
+  else root.querySelector<HTMLButtonElement>('#phase-maintenance')!.click();
+}
+
+const completionCases = flows.flatMap(flow =>
+  (['success', 'failure'] as const).flatMap(outcome =>
+    ['/other', '/settings'].map(destination => ({ flow, name: flow.name, outcome, destination }))));
+
+it.each(completionCases)('departed $name $outcome cannot mutate either mount across $destination', async ({ flow, outcome, destination }) => {
+  const pending = deferred<Response>();
+  const network = vi.fn(() => pending.promise);
+  vi.stubGlobal('fetch', network);
+  go('/settings');
+  const original = state.user;
+  const saved = { ...state.user!, ...flow.payload };
+  begin(flow);
+  expect(network).toHaveBeenCalledWith('/api/auth/me', expect.objectContaining({
+    method: 'PUT', body: JSON.stringify(flow.payload),
+  }));
+  const oldRoot = document.querySelector<HTMLElement>('.page')!;
+  const oldHTML = oldRoot.innerHTML;
+  const oldValues = [...oldRoot.querySelectorAll('input')].map(control => control.value);
+  const oldButtons = [...oldRoot.querySelectorAll('button')].map(control => control.disabled);
+  go(destination);
+  // Give the replacement its own visible feedback and pending preset controls.
+  if (destination === '/settings') {
+    network.mockResolvedValueOnce(new Response(JSON.stringify({ user: { ...state.user!, firstName: 'Current profile' } })));
+    submit('profile-form');
+    await settle();
+    input('s-name', 'New draft');
+    input('s-cal', '2400');
+    const newer = deferred<Response>();
+    network.mockReturnValueOnce(newer.promise);
+    document.querySelector<HTMLButtonElement>('#phase-mini-cut')!.click();
+    // Keep the newer request pending until after checking the old completion.
+    const completeNewer = () => newer.resolve(new Response(JSON.stringify({ user: saved })));
+    const currentHTML = document.querySelector('#app')!.innerHTML;
+    const currentValues = [...document.querySelectorAll('input')].map(control => control.value);
+    const currentButtons = [...document.querySelectorAll('button')].map(control => control.disabled);
+    const beforeCompletion = state.user;
+    pending.resolve(new Response(JSON.stringify(outcome === 'success' ? { user: saved } : { error: 'Old failure' }), { status: outcome === 'success' ? 200 : 500 }));
+    await settle();
+    expect(state.user).toEqual(outcome === 'success' ? saved : beforeCompletion);
+    expect(document.querySelector('#app')!.innerHTML).toBe(currentHTML);
+    expect([...document.querySelectorAll('input')].map(control => control.value)).toEqual(currentValues);
+    expect([...document.querySelectorAll('button')].map(control => control.disabled)).toEqual(currentButtons);
+    completeNewer();
+    await settle();
+  } else {
+    pending.resolve(new Response(JSON.stringify(outcome === 'success' ? { user: saved } : { error: 'Old failure' }), { status: outcome === 'success' ? 200 : 500 }));
+    await settle();
+    expect(state.user).toEqual(outcome === 'success' ? saved : original);
+    expect(document.querySelector('#app')!.textContent).toBe('Other screen');
+  }
+  expect(oldRoot.innerHTML).toBe(oldHTML);
+  expect([...oldRoot.querySelectorAll('input')].map(control => control.value)).toEqual(oldValues);
+  expect([...oldRoot.querySelectorAll('button')].map(control => control.disabled)).toEqual(oldButtons);
+});
+
+it.each(flows)('guest $name persists submitted values and shows the existing message', async flow => {
+  setGuestMode(true);
+  const network = vi.fn();
+  vi.stubGlobal('fetch', network);
+  go('/settings');
+  expect(document.querySelector('#password-form')).toBeNull();
+  begin(flow);
+  await settle();
+  const saved = (await auth.me()).user;
+  expect(saved).toMatchObject(flow.payload);
+  expect(state.user).toEqual(saved);
+  expect(document.querySelector(`#${flow.message}`)!.textContent).toBe(flow.success);
+  expect(document.querySelector(`#${flow.message}`)!.className).toBe('form-success');
+  go('/settings');
+  for (const [id, value] of Object.entries(flow.inputs)) expect(document.querySelector<HTMLInputElement>(`#${id}`)!.value).toBe(value);
+  expect(network).not.toHaveBeenCalled();
+});
+
+it.each(flows)('guest $name remains persisted when response delivery outlives its mount', async flow => {
+  setGuestMode(true);
+  const delivery = deferred<void>();
+  const save = localAuth.updateProfile;
+  vi.spyOn(localAuth, 'updateProfile').mockImplementationOnce(async data => {
+    const result = await save(data);
+    await delivery.promise;
+    return result;
+  });
+  go('/settings');
+  begin(flow);
+  await settle();
+  expect((await auth.me()).user).toMatchObject(flow.payload);
+  go('/settings');
+  input('s-name', 'Fresh draft');
+  input('s-cal', '2600');
+  const html = document.querySelector('#app')!.innerHTML;
+  delivery.resolve();
+  await settle();
+  expect(state.user).toMatchObject(flow.payload);
+  expect(document.querySelector('#app')!.innerHTML).toBe(html);
+  expect(document.querySelector<HTMLInputElement>('#s-name')!.value).toBe('Fresh draft');
+  expect(document.querySelector<HTMLInputElement>('#s-cal')!.value).toBe('2600');
+});
+
+it.each(flows)('a live $name HTTP failure preserves state and edits', async flow => {
+  const pending = deferred<Response>();
+  vi.stubGlobal('fetch', vi.fn(() => pending.promise));
+  go('/settings');
+  const original = state.user;
+  begin(flow);
+  const values = [...document.querySelectorAll('input')].map(control => control.value);
+  pending.resolve(new Response(JSON.stringify({ error: 'Save failed' }), { status: 500 }));
+  await settle();
+  expect(state.user).toBe(original);
+  expect(document.querySelector(`#${flow.message}`)!.className).toBe('form-error');
+  expect(document.querySelector(`#${flow.message}`)!.textContent).toBe('Save failed');
+  expect([...document.querySelectorAll('input')].map(control => control.value)).toEqual(values);
+  expect([...document.querySelectorAll('button')].every(button => !button.disabled)).toBe(true);
+});
+
+it.each(flows)('a live $name HTTP save captures its payload and publishes the returned user', async flow => {
+  const pending = deferred<Response>();
+  const network = vi.fn(() => pending.promise);
+  vi.stubGlobal('fetch', network);
+  go('/settings');
+  const saved = { ...state.user!, ...flow.payload };
+  begin(flow);
+  expect(network).toHaveBeenCalledTimes(1);
+  expect(network).toHaveBeenCalledWith('/api/auth/me', expect.objectContaining({
+    method: 'PUT', body: JSON.stringify(flow.payload), credentials: 'include',
+  }));
+  input('s-name', 'Later draft');
+  pending.resolve(new Response(JSON.stringify({ user: saved })));
+  await settle();
+  expect(state.user).toEqual(saved);
+  expect(document.querySelector(`#${flow.message}`)!.textContent).toBe(flow.success);
+  expect(document.querySelector(`#${flow.message}`)!.className).toBe('form-success');
+  expect([...document.querySelectorAll('button')].every(button => !button.disabled)).toBe(true);
+  expect(document.querySelector<HTMLInputElement>('#s-name')!.value).toBe('Later draft');
+});
+
+it.each(['success', 'failure'] as const)('password %s uses captured values and stays within the live mount', async outcome => {
+  const pending = deferred<Response>();
+  const network = vi.fn(() => pending.promise);
+  vi.stubGlobal('fetch', network);
+  go('/settings');
+  input('s-current-pw', 'current-password');
+  input('s-new-pw', 'new-password');
+  submit('password-form');
+  input('s-current-pw', 'changed-current');
+  input('s-new-pw', 'changed-new');
+  expect(network).toHaveBeenCalledWith('/api/auth/change-password', expect.objectContaining({
+    method: 'POST', body: JSON.stringify({ currentPassword: 'current-password', newPassword: 'new-password' }),
+  }));
+  pending.resolve(new Response(JSON.stringify(outcome === 'success' ? { success: true } : { error: 'Wrong password' }), { status: outcome === 'success' ? 200 : 400 }));
+  await settle();
+  expect(document.querySelector('#pw-msg')!.className).toBe(outcome === 'success' ? 'form-success' : 'form-error');
+  expect(document.querySelector('#pw-msg')!.textContent).toBe(outcome === 'success' ? 'Password changed!' : 'Wrong password');
+  expect(document.querySelector<HTMLInputElement>('#s-current-pw')!.value).toBe(outcome === 'success' ? '' : 'changed-current');
+  expect(document.querySelector<HTMLInputElement>('#s-new-pw')!.value).toBe(outcome === 'success' ? '' : 'changed-new');
+});
+
+it.each((['success', 'failure'] as const).flatMap(outcome =>
+  ['/other', '/settings'].map(destination => ({ outcome, destination }))))('departed password $outcome cannot clear inputs or publish across $destination', async ({ outcome, destination }) => {
+  const pending = deferred<Response>();
+  vi.stubGlobal('fetch', vi.fn(() => pending.promise));
+  go('/settings');
+  input('s-current-pw', 'original-current');
+  input('s-new-pw', 'original-new');
+  submit('password-form');
+  const root = document.querySelector('.page')!;
+  go(destination);
+  if (destination === '/settings') {
+    input('s-current-pw', 'fresh-current');
+    input('s-new-pw', 'fresh-new');
+  }
+  const html = document.querySelector('#app')!.innerHTML;
+  pending.resolve(new Response(JSON.stringify(outcome === 'success' ? { success: true } : { error: 'Old password failure' }), { status: outcome === 'success' ? 200 : 400 }));
+  await settle();
+  expect(document.querySelector('#app')!.innerHTML).toBe(html);
+  expect(root.querySelector('#pw-msg')!.classList.contains('hidden')).toBe(true);
+  expect(root.querySelector<HTMLInputElement>('#s-current-pw')!.value).toBe('original-current');
+  expect(root.querySelector<HTMLInputElement>('#s-new-pw')!.value).toBe('original-new');
+  if (destination === '/settings') {
+    expect(document.querySelector<HTMLInputElement>('#s-current-pw')!.value).toBe('fresh-current');
+    expect(document.querySelector<HTMLInputElement>('#s-new-pw')!.value).toBe('fresh-new');
+  }
+});
+
+it('each message lasts three seconds after its latest publication with independent timers', async () => {
+  setGuestMode(true);
+  go('/settings');
+  submit('profile-form');
+  await settle();
+  await vi.advanceTimersByTimeAsync(1000);
+  submit('targets-form');
+  await settle();
+  await vi.advanceTimersByTimeAsync(1000);
+  submit('profile-form');
+  await settle();
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(document.querySelector('#profile-msg')!.classList.contains('hidden')).toBe(false);
+  expect(document.querySelector('#targets-msg')!.classList.contains('hidden')).toBe(false);
+  await vi.advanceTimersByTimeAsync(999);
+  expect(document.querySelector('#profile-msg')!.classList.contains('hidden')).toBe(false);
+  expect(document.querySelector('#targets-msg')!.classList.contains('hidden')).toBe(false);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(document.querySelector('#profile-msg')!.classList.contains('hidden')).toBe(false);
+  expect(document.querySelector('#targets-msg')!.classList.contains('hidden')).toBe(true);
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(document.querySelector('#profile-msg')!.classList.contains('hidden')).toBe(true);
+  expect(document.querySelector('#targets-msg')!.classList.contains('hidden')).toBe(true);
+});
+
+it.each(['disposed', 'disconnected'] as const)('retained controls cannot start any form action when %s', async lifetime => {
+  const cleanup = vi.spyOn(router, 'setCleanup');
+  const network = vi.fn().mockResolvedValue(new Response(JSON.stringify({ user: state.user })));
+  vi.stubGlobal('fetch', network);
+  go('/settings');
+  const root = document.querySelector<HTMLElement>('.page')!;
+  if (lifetime === 'disposed') {
+    const dispose = cleanup.mock.calls[0][0];
+    dispose();
+    dispose();
+    expect(root.isConnected).toBe(true);
+  } else root.remove();
+  for (const flow of flows) begin(flow, root);
+  input('s-current-pw', 'old-current', root);
+  input('s-new-pw', 'old-new', root);
+  submit('password-form', root);
+  await settle();
+  expect(network).not.toHaveBeenCalled();
+});
+
+it('disposal clears every feedback timer without changing retained messages', async () => {
+  const cleanup = vi.spyOn(router, 'setCleanup');
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(url.endsWith('change-password') ? { success: true } : { user: state.user }))));
+  go('/settings');
+  for (const flow of flows) {
+    begin(flow);
+    await settle();
+  }
+  submit('password-form');
+  await settle();
+  const root = document.querySelector<HTMLElement>('.page')!;
+  expect(vi.getTimerCount()).toBe(5);
+  const dispose = cleanup.mock.calls[0][0];
+  dispose();
+  dispose();
+  expect(vi.getTimerCount()).toBe(0);
+  const html = root.innerHTML;
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(root.innerHTML).toBe(html);
+});

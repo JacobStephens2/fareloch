@@ -1,9 +1,9 @@
 import { auth, API_BASE, getToken } from '../api';
 import { state, setState } from '../state';
-import { navigate } from '../router';
+import { navigate, setCleanup } from '../router';
 import { isGuestMode, clearGuestData } from '../local-db';
 import { getTheme, setTheme, type ThemePref } from '../theme';
-import { phaseTargetPresets } from '../../server/src/nutrition';
+import { mountSettingsForms } from './settings-form-session';
 
 async function downloadCsv(path: string, filename: string) {
   const token = getToken();
@@ -190,6 +190,9 @@ export function settingsView() {
       </div>
     `,
     init: () => {
+      const root = document.querySelector<HTMLElement>('.page')!;
+      setCleanup(mountSettingsForms(root));
+
       // Theme toggle
       document.querySelectorAll('.theme-option').forEach((btn) => {
         btn.addEventListener('click', () => {
@@ -203,115 +206,7 @@ export function settingsView() {
         });
       });
 
-      // Profile form
-      document.getElementById('profile-form')!.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const firstName = (document.getElementById('s-name') as HTMLInputElement).value;
-        const ft = parseInt((document.getElementById('s-height-ft') as HTMLInputElement).value) || 5;
-        const inches = parseInt((document.getElementById('s-height-in') as HTMLInputElement).value) || 0;
-        const heightInches = ft * 12 + inches;
-
-        try {
-          const { user: updated } = await auth.updateProfile({ firstName, heightInches } as any);
-          setState({ user: updated });
-          showMsg('profile-msg', 'Profile saved!', 'success');
-        } catch (err: any) {
-          showMsg('profile-msg', err.message, 'error');
-        }
-      });
-
-      // Phase presets save both days in one profile update.
-      for (const { phase, label } of phases) {
-        document.getElementById(`phase-${phase}`)!.addEventListener('click', async () => {
-          const { rest, workout } = phaseTargetPresets(state.user!.currentWeightLbs, phase);
-          const message = document.getElementById('phase-presets-msg')!;
-          const saveButtons = document.querySelectorAll<HTMLButtonElement>('#phase-presets button, #targets-form button, #workout-targets-form button');
-          saveButtons.forEach(button => { button.disabled = true; });
-          try {
-            const { user: updated } = await auth.updateProfile({
-              targetCalories: rest.calories,
-              targetCarbsG: rest.carbsG,
-              targetProteinG: rest.proteinG,
-              targetFatG: rest.fatG,
-              workoutTargetCalories: workout.calories,
-              workoutTargetCarbsG: workout.carbsG,
-              workoutTargetProteinG: workout.proteinG,
-              workoutTargetFatG: workout.fatG,
-            });
-            setState({ user: updated });
-            if (!message.isConnected) return;
-            for (const [id, value] of [
-              ['s-cal', updated.targetCalories], ['s-carbs', updated.targetCarbsG],
-              ['s-protein', updated.targetProteinG], ['s-fat', updated.targetFatG],
-              ['s-wcal', updated.workoutTargetCalories], ['s-wcarbs', updated.workoutTargetCarbsG],
-              ['s-wprotein', updated.workoutTargetProteinG], ['s-wfat', updated.workoutTargetFatG],
-            ] as const) {
-              (document.getElementById(id) as HTMLInputElement).value = String(value);
-            }
-            showMsg('phase-presets-msg', `${label} targets saved for rest and workout days!`, 'success');
-          } catch (err) {
-            if (message.isConnected) {
-              showMsg('phase-presets-msg', err instanceof Error ? err.message : 'Unable to save phase targets.', 'error');
-            }
-          } finally {
-            saveButtons.forEach(button => { button.disabled = false; });
-          }
-        });
-      }
-
-      // Targets form
-      document.getElementById('targets-form')!.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const targetCalories = parseInt((document.getElementById('s-cal') as HTMLInputElement).value);
-        const targetCarbsG = parseInt((document.getElementById('s-carbs') as HTMLInputElement).value);
-        const targetProteinG = parseInt((document.getElementById('s-protein') as HTMLInputElement).value);
-        const targetFatG = parseInt((document.getElementById('s-fat') as HTMLInputElement).value);
-
-        try {
-          const { user: updated } = await auth.updateProfile({ targetCalories, targetCarbsG, targetProteinG, targetFatG } as any);
-          setState({ user: updated });
-          showMsg('targets-msg', 'Targets saved!', 'success');
-        } catch (err: any) {
-          showMsg('targets-msg', err.message, 'error');
-        }
-      });
-
-      // Workout targets form
-      document.getElementById('workout-targets-form')!.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const workoutTargetCalories = parseInt((document.getElementById('s-wcal') as HTMLInputElement).value);
-        const workoutTargetCarbsG = parseInt((document.getElementById('s-wcarbs') as HTMLInputElement).value);
-        const workoutTargetProteinG = parseInt((document.getElementById('s-wprotein') as HTMLInputElement).value);
-        const workoutTargetFatG = parseInt((document.getElementById('s-wfat') as HTMLInputElement).value);
-
-        try {
-          const { user: updated } = await auth.updateProfile({
-            workoutTargetCalories, workoutTargetCarbsG, workoutTargetProteinG, workoutTargetFatG,
-          } as any);
-          setState({ user: updated });
-          showMsg('workout-targets-msg', 'Workout targets saved!', 'success');
-        } catch (err: any) {
-          showMsg('workout-targets-msg', err.message, 'error');
-        }
-      });
-
-      // Password form (only for real users)
       if (!guest) {
-        document.getElementById('password-form')!.addEventListener('submit', async (e) => {
-          e.preventDefault();
-          const current = (document.getElementById('s-current-pw') as HTMLInputElement).value;
-          const newPw = (document.getElementById('s-new-pw') as HTMLInputElement).value;
-
-          try {
-            await auth.changePassword(current, newPw);
-            showMsg('pw-msg', 'Password changed!', 'success');
-            (document.getElementById('s-current-pw') as HTMLInputElement).value = '';
-            (document.getElementById('s-new-pw') as HTMLInputElement).value = '';
-          } catch (err: any) {
-            showMsg('pw-msg', err.message, 'error');
-          }
-        });
-
         // Export buttons
         document.getElementById('export-meals-btn')!.addEventListener('click', async () => {
           try {
@@ -342,11 +237,4 @@ export function settingsView() {
       });
     },
   };
-}
-
-function showMsg(id: string, text: string, type: 'success' | 'error') {
-  const el = document.getElementById(id)!;
-  el.textContent = text;
-  el.className = type === 'success' ? 'form-success' : 'form-error';
-  setTimeout(() => el.classList.add('hidden'), 3000);
 }
