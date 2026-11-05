@@ -212,8 +212,9 @@ it('a current scan consumes duplicates, closes, then publishes the captured barc
   const scanner = instances[0];
   expect(scanner.start.mock.calls[0].slice(0, 2)).toEqual([
     { facingMode: 'environment' },
-    { fps: 15, qrbox: { width: 300, height: 150 }, aspectRatio: 1.777778 },
+    { fps: 15, qrbox: { width: 300, height: 150 } },
   ]);
+  expect(scanner.track.applyConstraints).toHaveBeenCalledWith({ aspectRatio: 1.777778 });
   expect(scanner.track.applyConstraints).toHaveBeenCalledWith({ advanced: [{ focusMode: 'continuous' }, { zoom: 1.5 }] });
   scanner.decode('012345');
   scanner.decode('duplicate');
@@ -284,7 +285,7 @@ it('delayed optional constraints cannot change successor flashlight controls', a
   expect(document.querySelector('#app')!.innerHTML).toBe(current);
   expect(oldButton.textContent).toBe('Flashlight');
   oldButton.click();
-  expect(instances[0].track.applyConstraints).toHaveBeenCalledTimes(2);
+  expect(instances[0].track.applyConstraints).toHaveBeenCalledTimes(3);
 });
 
 it.each(['current', 'departed'])('scanner import rejection is handled for a %s attempt', async how => {
@@ -322,8 +323,26 @@ it('retained scanner controls and callbacks cannot restart capture or lookup aft
   await settle();
   expect(instances).toHaveLength(1);
   expect(instances[0].stop).toHaveBeenCalledTimes(1);
-  expect(instances[0].track.applyConstraints).toHaveBeenCalledTimes(1);
+  expect(instances[0].track.applyConstraints).toHaveBeenCalledTimes(2);
   expect(barcode).not.toHaveBeenCalled();
   expect(document.querySelector('#app')!.innerHTML).toBe(current);
   expect(window.location.hash).toBe('#/other');
+});
+
+it('an accepted decode survives reopening while its owned camera stop is pending', async () => {
+  click('#scan-btn');
+  await settle();
+  const stopping = deferred<void>();
+  camera.shutdown = () => stopping.promise;
+  instances[0].decode('accepted');
+  await settle();
+  click('#scan-btn');
+  await settle();
+  expect(instances).toHaveLength(1);
+  stopping.resolve();
+  await settle();
+  expect(instances).toHaveLength(2);
+  expect(barcode.mock.calls).toEqual([['accepted']]);
+  expect(document.querySelector('#modal-food-name')!.textContent).toBe('Scanned apple');
+  expect(document.querySelector('#scanner-container')!.classList.contains('hidden')).toBe(false);
 });

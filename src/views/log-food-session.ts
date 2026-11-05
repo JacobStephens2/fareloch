@@ -48,6 +48,10 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
       const track = attempt.host.querySelector('video')?.srcObject as MediaStream | null;
       const cameraTrack = track?.getVideoTracks()[0];
       if (!cameraTrack || !validAttempt(attempt) || attempt.consumed) return;
+      // html5-qrcode 2.3.8 applies its aspectRatio option before attaching srcObject.
+      // Apply the preference after startup so a rejected constraint leaves owned tracks reachable.
+      try { await cameraTrack.applyConstraints({ aspectRatio: 1.777778 }); } catch { /* Optional camera preference. */ }
+      if (!validAttempt(attempt) || attempt.consumed) return;
       const caps = cameraTrack.getCapabilities() as MediaTrackCapabilities & {
         focusMode?: string[]; zoom?: { min: number; max: number }; torch?: boolean;
       };
@@ -116,7 +120,7 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
         started = true;
         await scanner.start(
           { facingMode: 'environment' },
-          { fps: 15, qrbox: { width: Math.min(window.innerWidth - 40, 300), height: 150 }, aspectRatio: 1.777778 },
+          { fps: 15, qrbox: { width: Math.min(window.innerWidth - 40, 300), height: 150 } },
           code => {
             if (!validAttempt(attempt) || attempt.consumed) return;
             attempt.consumed = true;
@@ -154,7 +158,8 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
     // Cleanup always settles the private gate, even if a scanner adapter throws.
     cameraGate = runCamera().catch(() => {});
     void cameraGate.then(() => {
-      if (validAttempt(attempt) && attempt.code !== undefined) void lookupBarcode(attempt.code);
+      // A later opening owns the controls, but does not cancel an already accepted barcode.
+      if (isLive() && !attempt.cancelled && attempt.code !== undefined) void lookupBarcode(attempt.code);
       if (cameraAttempt === attempt) {
         if (isLive()) scannerContainer.querySelector('.scanner-toolbar')?.remove();
         cameraAttempt = undefined;
