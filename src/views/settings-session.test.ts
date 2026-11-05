@@ -1,14 +1,15 @@
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { auth } from '../api';
-import { localAuth, setGuestMode } from '../local-db';
+import { setGuestMode } from '../local-db';
 import { route, startRouter } from '../router';
-import * as router from '../router';
 import { state } from '../state';
 import type { User } from '../types';
 import { deferred } from '../test/food-search-fixtures';
 import { settingsView } from './settings';
+import { mountSettingsForms } from './settings-form-session';
 
 const settle = () => vi.advanceTimersByTimeAsync(0);
+let disposeForms: (() => void) | undefined;
 
 function go(path: string) {
   window.history.replaceState(null, '', `#${path}`);
@@ -40,6 +41,8 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  disposeForms?.();
+  disposeForms = undefined;
   go('/other');
   state.user = null;
   vi.restoreAllMocks();
@@ -159,25 +162,18 @@ it.each(flows)('guest $name persists submitted values and shows the existing mes
   expect(network).not.toHaveBeenCalled();
 });
 
-it.each(flows)('guest $name remains persisted when response delivery outlives its mount', async flow => {
+it.each(flows)('guest $name remains persisted when its completion outlives its mount', async flow => {
   setGuestMode(true);
-  const delivery = deferred<void>();
-  const save = localAuth.updateProfile;
-  vi.spyOn(localAuth, 'updateProfile').mockImplementationOnce(async data => {
-    const result = await save(data);
-    await delivery.promise;
-    return result;
-  });
   go('/settings');
   begin(flow);
-  await settle();
-  expect((await auth.me()).user).toMatchObject(flow.payload);
+  // Leave before the real guest adapter's promise continuation publishes.
+  expect(state.user).not.toMatchObject(flow.payload);
   go('/settings');
   input('s-name', 'Fresh draft');
   input('s-cal', '2600');
   const html = document.querySelector('#app')!.innerHTML;
-  delivery.resolve();
   await settle();
+  expect((await auth.me()).user).toMatchObject(flow.payload);
   expect(state.user).toMatchObject(flow.payload);
   expect(document.querySelector('#app')!.innerHTML).toBe(html);
   expect(document.querySelector<HTMLInputElement>('#s-name')!.value).toBe('Fresh draft');
@@ -294,18 +290,26 @@ it('each message lasts three seconds after its latest publication with independe
   expect(document.querySelector('#targets-msg')!.classList.contains('hidden')).toBe(true);
 });
 
-it.each(['disposed', 'disconnected'] as const)('retained controls cannot start any form action when %s', async lifetime => {
-  const cleanup = vi.spyOn(router, 'setCleanup');
+it.each(['disposed', 'disconnected', 'route departure'] as const)('retained controls cannot start any form action after %s', async lifetime => {
   const network = vi.fn().mockResolvedValue(new Response(JSON.stringify({ user: state.user })));
   vi.stubGlobal('fetch', network);
-  go('/settings');
-  const root = document.querySelector<HTMLElement>('.page')!;
+  let root: HTMLElement;
   if (lifetime === 'disposed') {
-    const dispose = cleanup.mock.calls[0][0];
-    dispose();
-    dispose();
+    document.querySelector('#app')!.innerHTML = settingsView().html;
+    root = document.querySelector<HTMLElement>('.page')!;
+    disposeForms = mountSettingsForms(root);
+    disposeForms();
+    disposeForms();
     expect(root.isConnected).toBe(true);
-  } else root.remove();
+  } else {
+    go('/settings');
+    root = document.querySelector<HTMLElement>('.page')!;
+    if (lifetime === 'disconnected') root.remove();
+    else {
+      go('/other');
+      document.querySelector('#app')!.append(root);
+    }
+  }
   for (const flow of flows) begin(flow, root);
   input('s-current-pw', 'old-current', root);
   input('s-new-pw', 'old-new', root);
@@ -315,7 +319,6 @@ it.each(['disposed', 'disconnected'] as const)('retained controls cannot start a
 });
 
 it('disposal clears every feedback timer without changing retained messages', async () => {
-  const cleanup = vi.spyOn(router, 'setCleanup');
   vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(url.endsWith('change-password') ? { success: true } : { user: state.user }))));
   go('/settings');
   for (const flow of flows) {
@@ -325,10 +328,10 @@ it('disposal clears every feedback timer without changing retained messages', as
   submit('password-form');
   await settle();
   const root = document.querySelector<HTMLElement>('.page')!;
-  expect(vi.getTimerCount()).toBe(5);
-  const dispose = cleanup.mock.calls[0][0];
-  dispose();
-  dispose();
+  for (const message of [...flows.map(flow => flow.message), 'pw-msg']) {
+    expect(root.querySelector(`#${message}`)!.classList.contains('hidden')).toBe(false);
+  }
+  go('/other');
   expect(vi.getTimerCount()).toBe(0);
   const html = root.innerHTML;
   await vi.advanceTimersByTimeAsync(5000);
