@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { getDb } from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
-import { isDailyCheckKey } from '../daily-checks.js';
+import { dailyCheckValidationError } from '../daily-checks.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -19,8 +19,9 @@ router.get('/:date', (req: Request, res: Response) => {
 
 router.put('/:date', (req: Request, res: Response) => {
   const { key, checked } = req.body ?? {};
-  if (!isDailyCheckKey(key) || typeof checked !== 'boolean') {
-    res.status(400).json({ error: 'A valid daily check key and boolean checked value are required' });
+  const error = dailyCheckValidationError(key, checked);
+  if (error) {
+    res.status(400).json({ error });
     return;
   }
   const userId = req.user!.userId;

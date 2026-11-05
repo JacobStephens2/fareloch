@@ -6,6 +6,9 @@ export const DAILY_CHECKS = [
 
 export type DailyCheckKey = typeof DAILY_CHECKS[number]['key'];
 
-export function isDailyCheckKey(key: unknown): key is DailyCheckKey {
-  return DAILY_CHECKS.some(check => check.key === key);
+export function dailyCheckValidationError(key: unknown, checked: unknown): string | null {
+  if (!DAILY_CHECKS.some(check => check.key === key) || typeof checked !== 'boolean') {
+    return 'A valid daily check key and boolean checked value are required';
+  }
+  return null;
 }

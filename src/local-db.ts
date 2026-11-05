@@ -1,7 +1,7 @@
 import type { User, Food, ExternalFood, MealLog, Recipe, RecipeIngredient, WeightLog, WeightLogInput } from './types';
 import { type IngredientRow, type Macros, macrosOf, scaleMacros, recipePerServing, roundMacros } from '../server/src/nutrition';
 import { isWaistInches } from '../server/src/waist';
-import { isDailyCheckKey, type DailyCheckKey } from '../server/src/daily-checks';
+import { dailyCheckValidationError, type DailyCheckKey } from '../server/src/daily-checks';
 
 const GUEST_KEY = 'guest_mode';
 const SAMPLE_KEY = 'guest_sample_active';
@@ -683,9 +683,8 @@ export const localDailyChecks = {
   },
 
   set: async (date: string, key: DailyCheckKey, checked: boolean): Promise<{ checks: string[] }> => {
-    if (!isDailyCheckKey(key) || typeof checked !== 'boolean') {
-      throw new Error('A valid daily check key and boolean checked value are required');
-    }
+    const error = dailyCheckValidationError(key, checked);
+    if (error) throw new Error(error);
     const days = getStore<Record<string, string[]>>('guest_daily_checks', {});
     const checks = new Set(days[date] ?? []);
     if (checked) checks.add(key);

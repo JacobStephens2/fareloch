@@ -29,3 +29,14 @@ it('persists independent guest daily checks across reloads without changing meal
   expect(await reloaded.get('2026-11-04')).toEqual({ checks: [] });
   expect(await reloaded.get('2026-11-03')).toEqual({ checks: [] });
 });
+
+it.each([
+  '{"key":"unknown","checked":true}',
+  '{"key":"creatine","checked":"false"}',
+  '{"key":"creatine"}',
+])('rejects invalid guest daily checks without changing saved checks: %s', async input => {
+  await dailyChecks.set('2026-11-04', 'carotenoids', true);
+  const { key, checked } = JSON.parse(input);
+  await expect(dailyChecks.set('2026-11-04', key, checked)).rejects.toThrow('A valid daily check key and boolean checked value are required');
+  expect(await dailyChecks.get('2026-11-04')).toEqual({ checks: ['carotenoids'] });
+});
