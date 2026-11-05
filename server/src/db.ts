@@ -50,6 +50,13 @@ function initSchema() {
       PRIMARY KEY (user_id, date)
     );
 
+    CREATE TABLE IF NOT EXISTS daily_checks (
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      date TEXT NOT NULL,
+      check_key TEXT NOT NULL,
+      PRIMARY KEY (user_id, date, check_key)
+    );
+
     CREATE TABLE IF NOT EXISTS email_verification_tokens (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL REFERENCES users(id),

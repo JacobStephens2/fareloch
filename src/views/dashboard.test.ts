@@ -8,6 +8,7 @@ import { dashboardView } from './dashboard';
 vi.mock('../api', () => ({
   meals: { getByDate: vi.fn(), update: vi.fn(), delete: vi.fn(), copy: vi.fn() },
   workoutDays: { get: vi.fn(), set: vi.fn() },
+  dailyChecks: { get: async () => ({ checks: [] }), set: vi.fn() },
 }));
 
 function go(path: string) {

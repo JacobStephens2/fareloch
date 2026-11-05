@@ -1,4 +1,5 @@
 import type { User, Food, ExternalFood, MealLog, Recipe, RecipeIngredient, WeightLog, WeightLogInput } from './types';
+import type { DailyCheckKey } from '../server/src/daily-checks';
 import {
   isGuestMode,
   clearGuestData,
@@ -8,6 +9,7 @@ import {
   localRecipes,
   localWeight,
   localWorkoutDays,
+  localDailyChecks,
 } from './local-db';
 
 export const API_BASE: string = (import.meta.env.VITE_API_BASE as string | undefined) || '/api';
@@ -350,6 +352,22 @@ export const recipes = {
     isGuestMode()
       ? localRecipes.copy(id)
       : request<{ recipe: { id: number } }>(`/recipes/${id}/copy`, { method: 'POST' }),
+};
+
+// Daily checks
+export const dailyChecks = {
+  get: (date: string) =>
+    isGuestMode()
+      ? localDailyChecks.get(date)
+      : request<{ checks: string[] }>(`/daily-checks/${date}`),
+
+  set: (date: string, key: DailyCheckKey, checked: boolean) =>
+    isGuestMode()
+      ? localDailyChecks.set(date, key, checked)
+      : request<{ checks: string[] }>(`/daily-checks/${date}`, {
+          method: 'PUT',
+          body: JSON.stringify({ key, checked }),
+        }),
 };
 
 // Workout days
