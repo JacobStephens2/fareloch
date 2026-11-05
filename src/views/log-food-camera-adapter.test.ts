@@ -7,7 +7,7 @@ import { deferred } from '../test/food-search-fixtures';
 vi.mock('../api', () => ({ foods: { recent: vi.fn().mockResolvedValue({ foods: [] }) }, meals: {}, recipes: {} }));
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
-it('releases a real adapter stream when startup rejects before the video receives srcObject', async () => {
+it('releases a real adapter stream when aspect ratio constraints reject after departure', async () => {
   vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
   const constraints = deferred<void>();
   const track = {
