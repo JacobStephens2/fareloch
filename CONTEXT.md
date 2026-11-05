@@ -8,3 +8,4 @@ Terms used across the server, guest mode and the views. The Nutrition module (`s
 - **Unit scale**: how many default servings one household measure is (measure gram weight / food serving size).
 - **Stored rounding / Display rounding**: 0.1 for every field (what `meal_logs` holds) / whole kcal and 0.1 g (what recipe `perServing` and the modals show).
 - **Food search session**: the active search for foods within Log Food or a Recipe editor. Its results belong to the latest query in the active mode, and its lifetime ends when the user leaves the view.
+- **Dashboard date session**: The selected date, meal data, workout state and pending work owned by one mounted Dashboard; only current work for that mount and selection may publish.
