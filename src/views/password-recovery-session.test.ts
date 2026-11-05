@@ -265,6 +265,26 @@ it.each(flows)('router cleanup disables retained and reattached $kind forms', as
   expect(window.location.hash).toBe('#/other');
 });
 
+it.each(flows)('a reattached old $kind root before the app cannot steal a replacement mount', async flow => {
+  const network = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ success: true }))));
+  vi.stubGlobal('fetch', network);
+  go(flow.path);
+  const oldRoot = document.querySelector<HTMLElement>('#app .auth-container')!;
+  go('/other');
+  oldRoot.id = 'retained';
+  document.body.prepend(oldRoot);
+  go(flow.path);
+  const app = document.querySelector<HTMLElement>('#app')!;
+  begin(flow, app);
+  await settle();
+  expect(network).toHaveBeenCalledTimes(1);
+  expect(app.querySelector(`#${flow.kind}-msg`)!.textContent).toBe(flow.success);
+  begin(flow, oldRoot);
+  await settle();
+  expect(network).toHaveBeenCalledTimes(1);
+  expect(oldRoot.querySelector(`#${flow.kind}-msg`)!.classList.contains('hidden')).toBe(true);
+});
+
 it.each(flows.flatMap(flow => ['success', 'failure'].map(outcome => ({ flow, kind: flow.kind, outcome }))))('explicit $kind disposal is idempotent while connected and consumes pending $outcome', async ({ flow, outcome }) => {
   const pending = deferred<Response>();
   const network = vi.fn(() => pending.promise);

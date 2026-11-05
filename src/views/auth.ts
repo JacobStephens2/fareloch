@@ -152,7 +152,7 @@ export function forgotPasswordView() {
       </div>
     `,
     init: () => {
-      const root = document.querySelector<HTMLElement>('.auth-container')!;
+      const root = document.querySelector<HTMLElement>('#app .auth-container')!;
       setCleanup(mountPasswordRecovery(root, { kind: 'forgot' }));
     },
   };
@@ -181,7 +181,7 @@ export function resetPasswordView() {
       </div>
     `,
     init: () => {
-      const root = document.querySelector<HTMLElement>('.auth-container')!;
+      const root = document.querySelector<HTMLElement>('#app .auth-container')!;
       const params = getQueryParams();
       setCleanup(mountPasswordRecovery(root, { kind: 'reset', token: params.token || '' }));
     },
