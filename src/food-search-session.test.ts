@@ -7,7 +7,8 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
 it('starts inactive, trims without changing case, and replaces the debounce', async () => {
-  const search = vi.fn(async (_query: string) => ({ foods: [], external: [] }));
+  const queries: string[] = [];
+  const search = vi.fn(async (query: string) => { queries.push(query); return { foods: [], external: [] }; });
   const snapshots: FoodSearchSnapshot[] = [];
   const session = createFoodSearchSession({ search, onChange: s => snapshots.push(s) });
   session.setQuery('  Ap  ');
@@ -21,7 +22,7 @@ it('starts inactive, trims without changing case, and replaces the debounce', as
   expect(search).not.toHaveBeenCalled();
   expect(snapshots[snapshots.length - 1]).toEqual({ query: 'Apple', status: 'debouncing', source: 'search', result: null });
   await vi.advanceTimersByTimeAsync(1);
-  expect(search.mock.calls).toEqual([['Apple']]);
+  expect(queries).toEqual(['Apple']);
   expect(snapshots[snapshots.length - 1]?.status).toBe('ready');
 });
 

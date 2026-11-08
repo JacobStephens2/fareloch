@@ -175,15 +175,15 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
   let activeTab = 'search';
   let tabRevision = 0;
   const session = createFoodSearchSession({
-    search: query => foodsApi.search(query),
+    search: (query, onSaved) => foodsApi.search(query, onSaved),
     loadDefault: async () => ({ foods: (await foodsApi.recent()).foods, external: [] }),
     onChange: snapshot => {
       if (!isLive()) return;
-      searchInput.classList.toggle('searching', snapshot.status === 'debouncing' ||
+      searchInput.classList.toggle('searching', snapshot.status === 'debouncing' || snapshot.status === 'partial' ||
         (snapshot.status === 'loading' && snapshot.source === 'search'));
       if (snapshot.status === 'inactive') return;
       content.innerHTML = '';
-      if (snapshot.status === 'ready') {
+      if (snapshot.status === 'ready' || snapshot.status === 'partial') {
         if (snapshot.source === 'default') {
           if (snapshot.result.foods.length) {
             content.innerHTML = '<h4 class="section-label">Recent</h4>';
@@ -193,6 +193,7 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
           }
         } else {
           renderSearchResults(content, snapshot.result);
+          if (snapshot.status === 'partial') content.insertAdjacentHTML('beforeend', '<p class="text-muted">Searching external foods...</p>');
         }
       } else if (snapshot.status === 'error') {
         content.innerHTML = snapshot.source === 'default'

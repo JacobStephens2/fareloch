@@ -118,6 +118,35 @@ function stubUpstream(product: () => Response) {
   }));
 }
 
+it('saved-only search returns matching caller foods without contacting external services', async () => {
+  const ada = addUser('saved-search-ada@example.com', 'Ada');
+  const grace = addUser('saved-search-grace@example.com', 'Grace');
+  const token = tokenFor(ada, 'saved-search-ada@example.com', 'Ada');
+  const saved = await postSave(token, { ...oats, name: 'Banana', brand: 'Repeat foods', sourceId: 'banana' });
+  await postSave(token, { ...oats, name: 'Unrelated oats' });
+  await postSave(tokenFor(grace, 'saved-search-grace@example.com', 'Grace'), {
+    ...oats, name: 'Private banana', sourceId: 'private-banana',
+  });
+  const upstreamCalls: string[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.startsWith('http://127.0.0.1')) return realFetch(input, init);
+    upstreamCalls.push(url);
+    return upstream({ products: [], foods: [] });
+  }));
+
+  for (const query of ['BANANA', 'repeat']) {
+    const response = await fetch(`http://127.0.0.1:${port}/api/foods/search?q=${query}&savedOnly=true`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ foods: [saved.data.food], external: [] });
+  }
+  const unsigned = await fetch(`http://127.0.0.1:${port}/api/foods/search?q=banana&savedOnly=true`);
+  expect(await unsigned.json()).toEqual({ foods: [], external: [] });
+  expect(upstreamCalls).toEqual([]);
+});
+
 it('refuses to save an external food without a signed-in caller', async () => {
   const missing = await postSave(null, oats);
   expect(missing.status).toBe(401);

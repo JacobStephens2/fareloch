@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { setGuestMode } from './local-db';
+import { deferred, externalFood, food } from './test/food-search-fixtures';
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -78,4 +79,47 @@ it('sends native login to Fareloch when the build has no API override', async ()
   await auth.login('test@example.invalid', 'test-only-password');
 
   expect(fetchMock).toHaveBeenCalledWith('https://fareloch.app/api/auth/login', expect.anything());
+});
+
+it('keeps saved food usable if the external search fails', async () => {
+  const remote = deferred<Response>();
+  const banana = food('Banana');
+  vi.stubGlobal('fetch', vi.fn((url: string) => url.includes('savedOnly=true')
+    ? Promise.resolve(Response.json({ foods: [banana], external: [] })) : remote.promise));
+  const { foods } = await import('./api');
+  const matches = deferred<void>();
+  const search = foods.search('banana', saved => {
+    expect(saved).toEqual([banana]);
+    matches.resolve();
+  });
+  await matches.promise;
+  remote.reject(new Error('offline'));
+  await expect(search).resolves.toEqual({ foods: [banana], external: [] });
+});
+
+it('a late saved response cannot replace completed external results', async () => {
+  const saved = deferred<Response>();
+  vi.stubGlobal('fetch', vi.fn((url: string) => url.includes('savedOnly=true')
+    ? saved.promise : Promise.resolve(Response.json({ foods: [], external: [externalFood('Banana online')] }))));
+  const { foods } = await import('./api');
+  const onSaved = vi.fn();
+  await expect(foods.search('banana', onSaved)).resolves.toMatchObject({ external: [{ name: 'Banana online' }] });
+  saved.resolve(Response.json({ foods: [food('Banana')], external: [] }));
+  await saved.promise;
+  // Drain delivery through Response.json(), then verify no late publication.
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(onSaved).not.toHaveBeenCalled();
+});
+
+it.each([true, false])('saved lookup failure preserves external success=%s', async success => {
+  vi.stubGlobal('fetch', vi.fn((url: string) => {
+    if (url.includes('savedOnly=true') || !success) return Promise.reject(new Error('offline'));
+    return Promise.resolve(Response.json({ foods: [], external: [externalFood('Banana online')] }));
+  }));
+  const { foods } = await import('./api');
+  if (success) {
+    await expect(foods.search('banana', () => {})).resolves.toMatchObject({ external: [{ name: 'Banana online' }] });
+  } else {
+    await expect(foods.search('banana', () => {})).rejects.toThrow('offline');
+  }
 });

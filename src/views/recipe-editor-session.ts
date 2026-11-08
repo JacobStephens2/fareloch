@@ -34,13 +34,16 @@ export function mountRecipeEditor(root: HTMLElement, recipeId: 'new' | number): 
   const searchInput = find('ing-search') as HTMLInputElement;
   const results = find('ing-results')!;
   const session = createFoodSearchSession({
-    search: query => foodsApi.search(query),
+    search: (query, onSaved) => foodsApi.search(query, onSaved),
     onChange: snapshot => {
       if (!isLive()) return;
-      searchInput.classList.toggle('searching', snapshot.status === 'debouncing' || snapshot.status === 'loading');
+      searchInput.classList.toggle('searching', snapshot.status === 'debouncing' || snapshot.status === 'loading' || snapshot.status === 'partial');
       results.innerHTML = '';
-      results.classList.toggle('hidden', snapshot.status !== 'ready' && snapshot.status !== 'error');
-      if (snapshot.status === 'ready') renderIngredientResults(snapshot.result);
+      results.classList.toggle('hidden', snapshot.status !== 'ready' && snapshot.status !== 'partial' && snapshot.status !== 'error');
+      if (snapshot.status === 'ready' || snapshot.status === 'partial') {
+        renderIngredientResults(snapshot.result);
+        if (snapshot.status === 'partial') results.insertAdjacentHTML('beforeend', '<p class="text-muted">Searching external foods...</p>');
+      }
       if (snapshot.status === 'error') results.innerHTML = '<p class="form-error" style="padding:8px">Search failed</p>';
     },
   });
