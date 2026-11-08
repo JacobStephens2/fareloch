@@ -81,6 +81,12 @@ router.get('/search', optionalAuth, async (req: Request, res: Response) => {
       `).all(req.user.userId, `%${query}%`, `%${query}%`, req.user.userId) as any[];
     }
 
+    // Let saved matches reach the caller without waiting for external services.
+    if (req.query.savedOnly === 'true') {
+      res.json({ foods: local, external: [] });
+      return;
+    }
+
     // Search external APIs
     const [offResults, usdaResults, fsResults] = await Promise.allSettled([
       searchOpenFoodFacts(query),

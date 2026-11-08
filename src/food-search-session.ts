@@ -7,12 +7,12 @@ export interface FoodSearchResult {
 
 type Source = 'search' | 'default' | null;
 export type FoodSearchSnapshot = { query: string; source: Source } & (
-  | { status: 'ready'; result: FoodSearchResult }
+  | { status: 'ready' | 'partial'; result: FoodSearchResult }
   | { status: 'inactive' | 'idle' | 'debouncing' | 'loading' | 'error'; result: null }
 );
 
 export function createFoodSearchSession({ search, loadDefault, onChange }: {
-  search: (query: string) => Promise<FoodSearchResult>;
+  search: (query: string, onSaved: (foods: Food[]) => void) => Promise<FoodSearchResult>;
   loadDefault?: () => Promise<FoodSearchResult>;
   onChange: (snapshot: FoodSearchSnapshot) => void;
 }) {
@@ -28,14 +28,18 @@ export function createFoodSearchSession({ search, loadDefault, onChange }: {
     revision++;
   }
 
-  function publish(status: Exclude<FoodSearchSnapshot['status'], 'ready'>, source: Source) {
+  function publish(status: Exclude<FoodSearchSnapshot['status'], 'ready' | 'partial'>, source: Source) {
     onChange({ query, status, source, result: null });
   }
 
   async function load(source: 'search' | 'default', current: number) {
     publish('loading', source);
     try {
-      const result = await (source === 'search' ? search(query) : loadDefault!());
+      const result = await (source === 'search' ? search(query, foods => {
+        if (current === revision && active && !disposed) {
+          onChange({ query, status: 'partial', source, result: { foods, external: [] } });
+        }
+      }) : loadDefault!());
       if (current === revision && active && !disposed) {
         onChange({ query, status: 'ready', source, result });
       }

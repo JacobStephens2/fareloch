@@ -160,23 +160,28 @@ export const auth = {
 // Saving an external food on the server requires a signed-in caller.
 // Guest mode stores that save on this device, and uses local-db for recent, custom, create, and delete.
 export const foods = {
-  search: (q: string) => {
-    if (!isGuestMode()) {
-      return request<{ foods: Food[]; external: ExternalFood[] }>(`/foods/search?q=${encodeURIComponent(q)}`);
+  search: async (q: string, onSaved?: (foods: Food[]) => void): Promise<{ foods: Food[]; external: ExternalFood[] }> => {
+    const guest = isGuestMode();
+    const path = `/foods/search?q=${encodeURIComponent(q)}`;
+    let completed = false;
+    const saved = (guest ? localFoods.search(q)
+      : onSaved ? request<{ foods: Food[] }>(`${path}&savedOnly=true`)
+      : Promise.resolve<{ foods: Food[] }>({ foods: [] }))
+      .then(result => {
+        if (!completed && result.foods.length) onSaved?.(result.foods);
+        return result.foods;
+      }).catch((): Food[] => []);
+
+    try {
+      const remote = await (guest ? requestNoAuthRedirect : request)<{ foods: Food[]; external: ExternalFood[] }>(path);
+      completed = true;
+      return { foods: guest ? await saved : remote.foods, external: remote.external };
+    } catch (error) {
+      const foods = await saved;
+      completed = true;
+      if (guest || foods.length) return { foods, external: [] };
+      throw error;
     }
-    // Merge local custom foods with server external results
-    return (async () => {
-      const [local, remote] = await Promise.allSettled([
-        localFoods.search(q),
-        requestNoAuthRedirect<{ foods: Food[]; external: ExternalFood[] }>(`/foods/search?q=${encodeURIComponent(q)}`),
-      ]);
-      const localResult = local.status === 'fulfilled' ? local.value : { foods: [], external: [] };
-      const remoteResult = remote.status === 'fulfilled' ? remote.value : { foods: [], external: [] };
-      return {
-        foods: localResult.foods,
-        external: remoteResult.external,
-      };
-    })();
   },
 
   barcode: async (code: string) => {
