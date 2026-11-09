@@ -13,7 +13,7 @@ const svgPath = path.join(root, 'public', 'logo.svg');
 const svg = fs.readFileSync(svgPath);
 
 // Keep the same mark as the web icon, hiding only its named background.
-// A 76dp logo box on a 108dp layer puts the shore and dots within the central
+// A 76dp logo box on a 108dp layer puts the enclosure, F and dots within the central
 // 66dp safe circle, with transparent overscan for launcher masks and motion.
 const adaptiveSvg = Buffer.from(`
 <svg xmlns="http://www.w3.org/2000/svg" width="108" height="108" viewBox="0 0 108 108">

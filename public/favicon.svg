@@ -1,6 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>Fareloch</title>
   <defs>
-    <!-- Deep water teal — still in the app's green family, reads as a loch not a letter -->
+    <!-- Deep-water teal from the Fareloch palette. -->
     <linearGradient id="bg" x1="72" y1="0" x2="440" y2="512" gradientUnits="userSpaceOnUse">
       <stop offset="0%" stop-color="#14B8A6"/>
       <stop offset="55%" stop-color="#0F766E"/>
@@ -11,55 +12,14 @@
   <!-- Squircle background -->
   <rect id="background" width="512" height="512" rx="112" fill="url(#bg)"/>
 
-  <!--
-    Mark: a bounded still-water loch seen from above.
-    Outer ring = shore / enclosure. Inner fill = quiet water.
-    Drawn with evenodd so the shore is a true ring, not a face.
-  -->
-  <path
-    fill="#FFFFFF"
-    fill-rule="evenodd"
-    d="
-      M 256 110
-      C 360 110 430 170 430 248
-      C 430 326 360 386 256 386
-      C 152 386 82 326 82 248
-      C 82 170 152 110 256 110
-      Z
-      M 256 168
-      C 330 168 378 200 378 248
-      C 378 296 330 328 256 328
-      C 182 328 134 296 134 248
-      C 134 200 182 168 256 168
-      Z
-    "/>
+  <!-- A simple enclosed basin retains the loch motif. -->
+  <circle cx="256" cy="256" r="174" fill="none" stroke="#FFFFFF" stroke-width="22"/>
 
-  <!-- Still-water surface: lower lobe of the basin -->
-  <path
-    fill="#FFFFFF"
-    d="
-      M 134 248
-      C 134 296 182 328 256 328
-      C 330 328 378 296 378 248
-      C 340 268 300 278 256 278
-      C 212 278 172 268 134 248
-      Z
-    "/>
-
-  <!-- Soft surface glint (not a mouth — offset high, short) -->
-  <path
-    d="M 190 220 Q 256 204 322 220"
-    fill="none"
-    stroke="#0F766E"
-    stroke-width="10"
-    stroke-linecap="round"
-    opacity="0.22"/>
-
-  <!-- Warm calorie-ring accent on the shore, outside the water body -->
-  <circle cx="378" cy="180" r="16" fill="#F59E0B"/>
+  <!-- A bold F identifies Fareloch without relying on an ambiguous water shape. -->
+  <path fill="#FFFFFF" d="M 192 146 H 334 V 186 H 236 V 230 H 320 V 270 H 236 V 340 H 192 Z"/>
 
   <!-- Macro indicator dots: Carbs · Protein · Fat -->
-  <circle cx="210" cy="430" r="12" fill="#3B82F6"/>
-  <circle cx="256" cy="430" r="12" fill="#EF4444"/>
-  <circle cx="302" cy="430" r="12" fill="#F59E0B"/>
+  <circle cx="214" cy="364" r="12" fill="#3B82F6"/>
+  <circle cx="256" cy="364" r="12" fill="#EF4444"/>
+  <circle cx="298" cy="364" r="12" fill="#F59E0B"/>
 </svg>
