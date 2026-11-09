@@ -525,6 +525,51 @@ input, button, select, textarea {
   color: var(--danger);
 }
 
+.sticky-day-summary {
+  position: fixed;
+  inset: 0 0 auto;
+  z-index: 20;
+  max-width: 600px;
+  margin: 0 auto;
+  padding: calc(10px + var(--safe-top)) calc(16px + var(--safe-right)) 12px calc(16px + var(--safe-left));
+  background: color-mix(in srgb, var(--surface-card) 80%, transparent);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 12px 32px -4px rgba(18, 28, 42, 0.06);
+}
+
+.sticky-day-summary[hidden] { display: none; }
+
+.sticky-day-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.sticky-day-macros {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.sticky-day-macro dt {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+}
+
+.sticky-day-macro dd {
+  font-size: 0.8rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.sticky-day-macro dd.over { color: var(--danger); }
+
 .dashboard-actions {
   display: flex;
   justify-content: center;
