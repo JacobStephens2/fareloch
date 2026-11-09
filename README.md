@@ -47,6 +47,10 @@ node dist/index.js   # Runs on :3457
 ### Launcher icons
 
 `public/logo.svg` is the artwork source for `scripts/generate-icons.mjs`.
+The mark is a bold Fareloch **F** inside an enclosed basin, with the three macro
+colors beneath it. The monogram replaces the abstract water shape so the icon
+has a clear identity at Android launcher sizes, while retaining the enclosed
+loch motif and teal palette from [the naming record](./FARELOCH-NAME.md#8-visual-direction).
 After `npm ci`, run `npm run generate:icons` to regenerate the checked-in web,
 legacy Android, and adaptive Android icons with the locked Sharp dependency.
 Keep the SVG's `background` ID on the background rectangle: the generator hides
@@ -54,8 +58,8 @@ it for the transparent adaptive foreground while retaining the existing Android
 background layer (`android/app/src/main/res/drawable/ic_launcher_bg.xml`).
 
 The adaptive foreground layers are 108dp (108/162/216/324/432px across the five
-densities). The Fareloch mark and macro dots fit inside the central 66dp safe
-circle. Run `npx vitest run src/launcher-icons.test.ts` to check transparent
+densities). The Fareloch monogram, enclosure and macro dots fit inside the
+central 66dp safe circle. Run `npx vitest run src/launcher-icons.test.ts` to check transparent
 padding, circle and squircle masks, and reproducible generation.
 
 Environment variables for the server (set in systemd service or `.env`):

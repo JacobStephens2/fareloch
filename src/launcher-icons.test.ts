@@ -16,12 +16,12 @@ const densities = [
   ['xxxhdpi', 432],
 ] as const;
 
-it.each(densities)('keeps the Fareloch mark and macro dots inside launcher masks at %s', async (density, size) => {
+it.each(densities)('keeps the Fareloch monogram and macro dots inside launcher masks at %s', async (density, size) => {
   const image = await loadImage(`${root}/android/app/src/main/res/mipmap-${density}/ic_launcher_foreground.png`);
   const context = createCanvas(image.width, image.height).getContext('2d');
   context.drawImage(image, 0, 0);
   const { data } = context.getImageData(0, 0, image.width, image.height);
-  const colors = { shore: 0, carbs: 0, protein: 0, fat: 0 };
+  const colors = { mark: 0, carbs: 0, protein: 0, fat: 0 };
   const clipped = { circle: 0, squircle: 0, safeArea: 0 };
   let foregroundOutsideSafeArea = 0;
 
@@ -34,7 +34,7 @@ it.each(densities)('keeps the Fareloch mark and macro dots inside launcher masks
       const radius = Math.hypot(dx, dy);
       if (radius > 33) foregroundOutsideSafeArea++;
       const [r, g, b] = data.slice(i, i + 3);
-      const color = r > 245 && g > 245 && b > 245 ? 'shore'
+      const color = r > 245 && g > 245 && b > 245 ? 'mark'
         : dy < 0 ? null
         : Math.abs(r - 59) + Math.abs(g - 130) + Math.abs(b - 246) < 15 ? 'carbs'
         : Math.abs(r - 239) + Math.abs(g - 68) + Math.abs(b - 68) < 15 ? 'protein'
