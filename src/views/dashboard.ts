@@ -188,9 +188,10 @@ function mountDashboardDateSession(root: HTMLElement, initialDate: string) {
 
   function syncSummaryVisibility() {
     if (!isLive()) return;
-    // This bar is fixed so it also works inside the body's overflow container.
-    // Keep it out of both the layout and accessibility tree until needed.
-    find('sticky-day-summary').hidden = find('macro-summary').getBoundingClientRect().bottom > 0;
+    // Take over before the full summary's totals scroll under the page header.
+    // Keep the compact bar out of the accessibility tree until needed.
+    const header = root.querySelector<HTMLElement>('.page-header')!;
+    find('sticky-day-summary').hidden = find('macro-summary').getBoundingClientRect().top > header.offsetHeight;
   }
 
   window.addEventListener('scroll', syncSummaryVisibility, { ...eventOptions, passive: true });

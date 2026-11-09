@@ -41,6 +41,11 @@ try {
     await page.locator('.meal-item').last().waitFor();
     const summary = page.getByRole('region', { name: 'Day totals' });
     assert(!await summary.isVisible(), `${width}px: keep the compact summary hidden at the top`);
+    const labelSize = await page.locator('.sticky-day-macro dt').first().evaluate(el => ({
+      actual: parseFloat(getComputedStyle(el).fontSize),
+      required: parseFloat(getComputedStyle(document.documentElement).fontSize) * 0.75,
+    }));
+    assert.equal(labelSize.actual, labelSize.required, 'style/DESIGN.md: Macro Stats labels must use 0.75rem');
 
     async function scrollToDinner() {
       await page.evaluate(async () => {
@@ -57,6 +62,19 @@ try {
         await summary.getByText(value, { exact: true }).waitFor({ state: 'visible', timeout: 5000 });
       }
     }
+
+    // Catch the gap before the card's trailing whitespace leaves the viewport.
+    await page.evaluate(() => {
+      const card = document.querySelector('#macro-summary');
+      window.scrollTo(0, window.scrollY + card.getBoundingClientRect().bottom - 10);
+    });
+    await page.waitForTimeout(100);
+    const handoff = await page.evaluate(() => ({
+      totals: ['cal-value', 'carbs-value', 'protein-value', 'fat-value'].map(id =>
+        document.getElementById(id).getBoundingClientRect().bottom),
+    }));
+    assert(handoff.totals.every(bottom => bottom <= 0), 'All original totals are offscreen');
+    assert(await summary.isVisible(), 'Day totals must remain visible when the original totals leave the viewport');
 
     await scrollToDinner();
     assert(await summary.isVisible(), `${width}px: day totals must stay visible while viewing dinner`);
