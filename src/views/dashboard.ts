@@ -114,6 +114,21 @@ export function dashboardView() {
 
         <div class="macro-remaining-summary" id="cal-remaining"></div>
 
+        <section id="sticky-day-summary" class="sticky-day-summary" aria-label="Day totals" hidden>
+          <div class="sticky-day-heading">
+            <span>Day totals</span>
+            <span id="sticky-day-date">${formatDate(date)}</span>
+          </div>
+          <dl class="sticky-day-macros">
+            ${([['cal', 'kcal'], ['carbs', 'Carbs (g)'], ['protein', 'Protein (g)'], ['fat', 'Fat (g)']] as const).map(([macro, label]) => `
+              <div class="sticky-day-macro">
+                <dt>${label}</dt>
+                <dd id="day-${macro}-value">0 / ${t[macro]}</dd>
+              </div>
+            `).join('')}
+          </dl>
+        </section>
+
         <div class="dashboard-actions">
           <button id="copy-prev-btn" class="btn btn-outline btn-sm">Copy Previous Day</button>
         </div>
@@ -171,6 +186,17 @@ function mountDashboardDateSession(root: HTMLElement, initialDate: string) {
     return !disposed && root.isConnected;
   }
 
+  function syncSummaryVisibility() {
+    if (!isLive()) return;
+    // Take over before the full summary's totals scroll under the page header.
+    // Keep the compact bar out of the accessibility tree until needed.
+    const header = root.querySelector<HTMLElement>('.page-header')!;
+    find('sticky-day-summary').hidden = find('macro-summary').getBoundingClientRect().top > header.offsetHeight;
+  }
+
+  window.addEventListener('scroll', syncSummaryVisibility, { ...eventOptions, passive: true });
+  window.addEventListener('resize', syncSummaryVisibility, eventOptions);
+
   function captureSelection() {
     const current = generation;
     return () => isLive() && current === generation;
@@ -213,6 +239,7 @@ function mountDashboardDateSession(root: HTMLElement, initialDate: string) {
     toggle.checked = isWorkout;
     find('workout-toggle-wrap').classList.toggle('active', isWorkout);
     updateMacroSummary(currentMeals);
+    syncSummaryVisibility();
     releaseMeals();
     const container = find('meals-container');
     if (mealStatus === 'error') {
@@ -272,6 +299,7 @@ function mountDashboardDateSession(root: HTMLElement, initialDate: string) {
     isWorkout = workoutCache.get(date) ?? false;
     find('date-label').textContent = formatDate(date);
     find('date-sub').textContent = formatDateSub(date);
+    find('sticky-day-date').textContent = formatDate(date);
     find('date-next').classList.toggle('invisible', date >= todayStr());
     resetCopyButton();
     render();
@@ -393,6 +421,17 @@ function mountDashboardDateSession(root: HTMLElement, initialDate: string) {
     const targetCarbs = t.carbs;
     const targetProtein = t.protein;
     const targetFat = t.fat;
+
+    for (const [macro, current, target] of [
+      ['cal', totals.calories, targetCal],
+      ['carbs', totals.carbs, targetCarbs],
+      ['protein', totals.protein, targetProtein],
+      ['fat', totals.fat, targetFat],
+    ] as const) {
+      const value = find(`day-${macro}-value`);
+      value.textContent = `${Math.round(current)} / ${target}`;
+      value.classList.toggle('over', current > target);
+    }
 
     // Update calorie ring
     const calValue = find('cal-value');
