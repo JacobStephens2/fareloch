@@ -155,7 +155,7 @@ export function dashboardView() {
         </div>
       </div>
     `,
-    init: () => mountDashboardDateSession(document.querySelector<HTMLElement>('.dashboard-page')!, date),
+    init: () => mountDashboardDateSession(document.getElementById('app')!.querySelector<HTMLElement>('.dashboard-page')!, date),
   };
 }
 

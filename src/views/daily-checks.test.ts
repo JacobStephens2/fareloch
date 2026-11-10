@@ -71,6 +71,23 @@ it.each(['detached', 'reattached', 'removed from container'])('guest pills retai
   expect(network).not.toHaveBeenCalled();
 });
 
+it('reattaching disposed Dashboard before the router outlet must not steal the replacement mount', async () => {
+  await showDashboard();
+  const oldRoot = document.querySelector<HTMLElement>('.dashboard-page')!;
+  go('/other');
+  document.body.prepend(oldRoot);
+  const disposedDOM = oldRoot.innerHTML;
+  renderDashboard();
+  await settle();
+  const replacement = document.querySelector('#app .dashboard-page')!;
+  expect(replacement.querySelector('[data-check-key="creatine"]')).not.toBeNull();
+  expect(replacement.querySelector<HTMLButtonElement>('[data-check-key="creatine"]')!.disabled).toBe(false);
+  expect(oldRoot.innerHTML).toBe(disposedDOM);
+  oldRoot.querySelector<HTMLButtonElement>('[data-check-key="creatine"]')!.click();
+  await settle();
+  expect(await dailyChecks.get('2026-11-04')).toEqual({ checks: [] });
+});
+
 it('toggles daily pills independently and reloads each date through arrows and the date picker', async () => {
   await dailyChecks.set('2026-11-03', 'carotenoids', true);
   await meals.quickLog({ date: state.selectedDate, mealType: 'breakfast', name: 'Breakfast', calories: 300, proteinG: 20 });
