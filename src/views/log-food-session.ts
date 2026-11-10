@@ -1,9 +1,10 @@
 import { foods as foodsApi, meals as mealsApi, recipes as recipesApi } from '../api';
 import { navigate } from '../router';
 import { createFoodSearchSession, type FoodSearchResult } from '../food-search-session';
-import { assignFoodDetailText, assignPerUnitMacros, assignSavedMeasureOptions, assignTotalMacros, macroChips, measureCountSuffix, savedMeasureSuffix, sourceLabel, textSpan } from './food-search-text';
-import type { Food, ExternalFood, FoodMeasure, Recipe, MealType } from '../types';
-import { scaleMacros, roundMacros, unitScale, caloriesFromMacros } from '../../server/src/nutrition';
+import { macroChips, measureCountSuffix, savedMeasureSuffix, sourceLabel, textSpan } from './food-search-text';
+import { mountFoodQuantitySelection } from './food-quantity-selection';
+import type { Food, ExternalFood, Recipe, MealType } from '../types';
+import { scaleMacros, roundMacros, caloriesFromMacros } from '../../server/src/nutrition';
 
 // Only physical camera ownership is shared between mounted Log Food sessions.
 let cameraGate: Promise<void> = Promise.resolve();
@@ -19,6 +20,7 @@ type CameraAttempt = {
 
 export function mountLogFood(root: HTMLElement, date: string, mealType: MealType): () => void {
   let disposed = false;
+  let quantitySelection: ReturnType<typeof mountFoodQuantitySelection> | undefined;
   const events = new AbortController();
   const isLive = () => !disposed && root.isConnected;
   const find = <T extends HTMLElement = HTMLElement>(id: string) => root.querySelector<T>(`#${id}`)!;
@@ -436,120 +438,25 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
     container.appendChild(list);
   }
 
-  function parseMeasures(food: Food): FoodMeasure[] {
-    if (!food.measures) return [];
-    try {
-      return JSON.parse(food.measures);
-    } catch {
-      return [];
-    }
-  }
-
   function showAddModal(food: Food) {
     const modal = find('food-detail-modal')!;
     find('modal-food-name')!.textContent = food.name;
-
-    const measures = parseMeasures(food);
-    const hasMeasures = measures.length > 0;
-
-    const measureOptions = hasMeasures
-      ? `<div class="form-group">
-          <label for="unit-select">Unit</label>
-          <select id="unit-select">
-            <option value="default"></option>
-          </select>
-        </div>`
-      : '';
-
+    quantitySelection?.dispose();
     const body = find('modal-body')!;
     body.innerHTML = `
-      ${food.brand ? '<p class="food-brand"></p>' : ''}
-      <div class="modal-macros" id="modal-per-unit"></div>
-      <p class="text-muted" id="modal-per-label"></p>
-      ${measureOptions}
-      <div class="form-group">
-        <label for="servings-input">Quantity</label>
-        <div class="servings-control">
-          <button id="serv-minus" class="btn-icon">-</button>
-          <input type="number" id="servings-input" value="1" min="1" step="1" />
-          <button id="serv-plus" class="btn-icon">+</button>
-        </div>
-      </div>
-      <div class="modal-total" id="modal-total"></div>
+      <div id="food-quantity"></div>
       <button id="add-food-btn" class="btn btn-primary btn-block">Add to ${capitalize(mealType)}</button>
     `;
-    assignFoodDetailText(
-      body,
-      food,
-      find('modal-per-label')!,
-      root.querySelector('#unit-select option[value="default"]'),
-    );
-    const perUnit = find('modal-per-unit')!;
-    const total = find('modal-total')!;
-    assignPerUnitMacros(perUnit, food);
-    assignTotalMacros(total, food);
-
-    // Named scale so it does not shadow the Nutrition unitScale function.
-    let scale = 1;
-
-    const servingsInput = find('servings-input') as HTMLInputElement;
-    const perLabel = find('modal-per-label');
-    const unitSelect = find('unit-select') as HTMLSelectElement | null;
-    if (unitSelect) assignSavedMeasureOptions(unitSelect, measures);
-
-    const updateTotal = () => {
-      const qty = parseFloat(servingsInput.value) || 1;
-      assignTotalMacros(total, food, scale * qty, 'rounded');
-    };
-
-    const updatePerUnit = () => {
-      assignPerUnitMacros(perUnit, food, scale, 'rounded');
-    };
-
-    if (unitSelect) {
-      on(unitSelect, 'change', () => {
-        const val = unitSelect.value;
-        if (val === 'default') {
-          scale = 1;
-          perLabel.textContent = `Per ${food.serving_size}${food.serving_unit}`;
-        } else {
-          const m = measures[parseInt(val)];
-          scale = unitScale(m.gramWeight, food.serving_size);
-          perLabel.textContent = `Per ${m.label} (${m.gramWeight}g)`;
-        }
-        updatePerUnit();
-        updateTotal();
-      });
-    }
-
-    on(servingsInput, 'input', updateTotal);
-    on(find('serv-minus'), 'click', () => {
-      servingsInput.value = String(Math.max(1, (parseFloat(servingsInput.value) || 1) - 1));
-      updateTotal();
-    });
-    on(find('serv-plus'), 'click', () => {
-      servingsInput.value = String((parseFloat(servingsInput.value) || 1) + 1);
-      updateTotal();
-    });
-
+    const selection = mountFoodQuantitySelection(find('food-quantity'), food, { kind: 'meal' });
+    quantitySelection = selection;
     on(find('add-food-btn'), 'click', async () => {
-      const qty = parseFloat(servingsInput.value) || 1;
-      const effectiveServings = qty * scale;
+      const amount = selection.read();
+      if (!amount) return;
       const btn = find('add-food-btn') as HTMLButtonElement;
       btn.disabled = true;
       btn.textContent = 'Adding...';
-
-      // Determine the unit label and scale if a non-default measure was selected
-      let unitLabel: string | undefined;
-      let savedUnitScale: number | undefined;
-      if (unitSelect && unitSelect.value !== 'default') {
-        const m = measures[parseInt(unitSelect.value)];
-        unitLabel = m.label;
-        savedUnitScale = scale;
-      }
-
       try {
-        await mealsApi.log({ date, mealType, foodId: food.id, servings: effectiveServings, unitLabel, unitScale: savedUnitScale });
+        await mealsApi.log({ date, mealType, foodId: food.id, servings: amount.servings, unitLabel: amount.unitLabel, unitScale: amount.unitScale });
         if (!isLive()) return;
         closeModal();
         navigate('#/');
@@ -559,11 +466,11 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
         btn.textContent = 'Failed - Retry';
       }
     });
-
     modal.classList.remove('hidden');
   }
 
   function showRecipeAddModal(recipe: Recipe) {
+    quantitySelection?.dispose();
     const modal = find('food-detail-modal')!;
     find('modal-food-name')!.textContent = recipe.name;
 
@@ -808,6 +715,7 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
   return () => {
     if (disposed) return;
     disposed = true;
+    quantitySelection?.dispose();
     ++tabRevision;
     session.dispose();
     events.abort();
