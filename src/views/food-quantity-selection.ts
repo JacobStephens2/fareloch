@@ -232,5 +232,3 @@ function assignTotalMacros(
     totalLine(`${figures.fat}g F`),
   );
 }
-
-
