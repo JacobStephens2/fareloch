@@ -1,10 +1,10 @@
-import { meals as mealsApi, workoutDays as workoutDaysApi } from '../api';
+import { dailyChecks as dailyChecksApi, meals as mealsApi, workoutDays as workoutDaysApi } from '../api';
 import { state, formatDate, todayStr, toLocalDateStr } from '../state';
 import { navigate, setCleanup } from '../router';
 import { isGuestMode, hasSampleData, dismissSampleData } from '../local-db';
 import type { MealLog, MealType } from '../types';
 import { mealPulseStatus } from '../../server/src/nutrition';
-import { mountDailyChecks } from '../components/daily-checks';
+import { DAILY_CHECKS } from '../../server/src/daily-checks';
 
 function formatDateSub(dateStr: string): string {
   const d = new Date(dateStr + 'T12:00:00');
@@ -155,7 +155,7 @@ export function dashboardView() {
         </div>
       </div>
     `,
-    init: () => mountDashboardDateSession(document.querySelector<HTMLElement>('.dashboard-page')!, date),
+    init: () => mountDashboardDateSession(document.getElementById('app')!.querySelector<HTMLElement>('.dashboard-page')!, date),
   };
 }
 
@@ -169,11 +169,12 @@ function mountDashboardDateSession(root: HTMLElement, initialDate: string) {
   const pendingWorkouts = new Map<string, number>();
   const timers = new Set<ReturnType<typeof setTimeout>>();
   const frames = new Set<number>();
-  const loadDailyChecks = mountDailyChecks(find('daily-checks'));
+  const pendingDailyChecks = new Set<string>();
   let selectedDate = initialDate;
   let generation = 0;
   let mealRevision = 0;
   let workoutRevision = 0;
+  let dailyChecksRevision = 0;
   let disposed = false;
   let currentMeals: MealLog[] = [];
   let mealStatus: 'loading' | 'ready' | 'error' = 'loading';
@@ -201,6 +202,79 @@ function mountDashboardDateSession(root: HTMLElement, initialDate: string) {
     const current = generation;
     return () => isLive() && current === generation;
   }
+
+  const dailyChecksContainer = find('daily-checks');
+  dailyChecksContainer.innerHTML = `
+    <div class="daily-check-pills" role="group" aria-label="Daily checks">
+      ${DAILY_CHECKS.map(check => `
+        <button type="button" class="daily-check-pill" data-check-key="${check.key}" aria-pressed="false" disabled>${check.label}</button>
+      `).join('')}
+    </div>
+    <p class="text-muted" role="status"></p>
+  `;
+  const dailyCheckButtons = [...dailyChecksContainer.querySelectorAll<HTMLButtonElement>('[data-check-key]')];
+  const dailyChecksStatus = dailyChecksContainer.querySelector<HTMLElement>('[role="status"]')!;
+
+  function disableDailyChecks(disabled: boolean) {
+    dailyCheckButtons.forEach(button => { button.disabled = disabled; });
+  }
+
+  function applyDailyChecks(checks: string[]) {
+    dailyCheckButtons.forEach(button => {
+      button.setAttribute('aria-pressed', String(checks.includes(button.dataset.checkKey!)));
+    });
+  }
+
+  async function refreshDailyChecks(date: string = selectedDate) {
+    if (!isLive() || date !== selectedDate) return;
+    const selectionIsCurrent = captureSelection();
+    const revision = ++dailyChecksRevision;
+    const isCurrent = () => selectionIsCurrent() && revision === dailyChecksRevision;
+    disableDailyChecks(true);
+    applyDailyChecks([]);
+    dailyChecksStatus.textContent = '';
+    try {
+      const { checks } = await dailyChecksApi.get(date);
+      if (isCurrent()) {
+        applyDailyChecks(checks);
+        disableDailyChecks(pendingDailyChecks.has(date));
+      }
+    } catch {
+      if (isCurrent()) {
+        dailyChecksStatus.textContent = 'Could not load daily checks. Reopen this date to retry.';
+      }
+    }
+    // Save feedback belongs to this read, including when its load failed.
+    return isCurrent;
+  }
+
+  dailyCheckButtons.forEach((button, index) => {
+    button.addEventListener('click', async () => {
+      const date = selectedDate;
+      if (!isLive() || !root.contains(dailyChecksContainer) || !dailyChecksContainer.contains(button)
+        || button.disabled || pendingDailyChecks.has(date)) return;
+      const key = DAILY_CHECKS[index].key;
+      const checked = button.getAttribute('aria-pressed') !== 'true';
+      pendingDailyChecks.add(date);
+      disableDailyChecks(true);
+      dailyChecksStatus.textContent = '';
+      let saved = false;
+      try {
+        await dailyChecksApi.set(date, key, checked);
+        saved = true;
+      } catch { /* Reload persisted state after either outcome. */ }
+      finally {
+        pendingDailyChecks.delete(date);
+      }
+      // A returning selection of this date needs a fresh read too. Disposal
+      // ends ownership permanently, but never cancels submitted persistence.
+      if (!isLive() || selectedDate !== date) return;
+      const refreshIsCurrent = await refreshDailyChecks(date);
+      if (!saved && refreshIsCurrent?.()) {
+        dailyChecksStatus.textContent = 'Could not save daily check. Please try again.';
+      }
+    }, eventOptions);
+  });
 
   function later(callback: () => void, delay: number) {
     const isCurrent = captureSelection();
@@ -305,7 +379,7 @@ function mountDashboardDateSession(root: HTMLElement, initialDate: string) {
     render();
     void refreshMeals(date);
     void readWorkout(date);
-    void loadDailyChecks(date);
+    void refreshDailyChecks(date);
   }
 
   find('sample-dismiss-btn')?.addEventListener('click', () => {
