@@ -491,134 +491,45 @@ it('Log Food shows an unmatched barcode as text', async () => {
   click('#scan-btn');
   await vi.advanceTimersByTimeAsync(0);
   const content = document.querySelector('#tab-content')!;
+
   expect(content.querySelector('img')).toBeNull();
   expect(content.textContent).toContain('No product found for barcode 0012345678905<img alt="unmatched-code">');
 });
 
-it('Log Food add modal and Recipe editor ingredient modal show brand, serving, and default unit as text', async () => {
-  const item = food('Apple');
-  item.brand = 'Acme<img alt="brand">';
-  item.serving_unit = 'g<img alt="unit">';
-  vi.mocked(foods.search).mockResolvedValue({ foods: [item], external: [] });
-
-  go('/log');
-  input('#food-search', 'apple');
+it.each(['/log', '/recipe'])('%s retires replaced quantity forms and keeps hidden current controls active', async path => {
+  vi.mocked(foods.search).mockResolvedValue({ foods: [food('First'), { ...food('Second'), id: 2 }], external: [] });
+  go(path);
+  const meal = path === '/log';
+  input(meal ? '#food-search' : '#ing-search', 'foods');
   await vi.advanceTimersByTimeAsync(400);
-  click('#tab-content .food-item');
-  const addModal = document.querySelector('#food-detail-modal')!;
-  expect(addModal.querySelector('img')).toBeNull();
-  expect(addModal.querySelector('.food-brand')!.textContent).toBe('Acme<img alt="brand">');
-  expect(addModal.querySelector('#modal-per-label')!.textContent).toBe('Per 100g<img alt="unit">');
-  expect(addModal.querySelector('#unit-select option[value="default"]')!.textContent).toBe('100g<img alt="unit"> (default)');
-
-  go('/recipe');
-  input('#ing-search', 'apple');
-  await vi.advanceTimersByTimeAsync(400);
-  click('#ing-results .food-item');
-  const ingredientModal = document.querySelector('#ing-modal')!;
-  expect(ingredientModal.querySelector('img')).toBeNull();
-  expect(ingredientModal.querySelector('.food-brand')!.textContent).toBe('Acme<img alt="brand">');
-  expect(ingredientModal.querySelector('#ing-modal-per-label')!.textContent).toBe('Per 100g<img alt="unit">');
-  expect(ingredientModal.querySelector('#ing-unit-select option[value="default"]')!.textContent).toBe('100g<img alt="unit"> (default)');
-});
-
-it('Log Food add modal and Recipe editor ingredient modal show saved measure label and gram weight as text', async () => {
-  const item = food('Apple');
-  item.measures = JSON.stringify([
-    { label: 'cup<img alt="measure">', gramWeight: 200 },
-    { label: 'slice</option><img alt="slice">', gramWeight: 30 },
-  ]);
-  vi.mocked(foods.search).mockResolvedValue({ foods: [item], external: [] });
-
-  go('/log');
-  input('#food-search', 'apple');
-  await vi.advanceTimersByTimeAsync(400);
-  click('#tab-content .food-item');
-  const addModal = document.querySelector('#food-detail-modal')!;
-  expect(addModal.querySelector('img')).toBeNull();
-  expect(addModal.querySelector('#unit-select option[value="0"]')!.textContent).toBe('cup<img alt="measure"> (200g)');
-  expect(addModal.querySelector('#unit-select option[value="1"]')!.textContent).toBe('slice</option><img alt="slice"> (30g)');
-
-  go('/recipe');
-  input('#ing-search', 'apple');
-  await vi.advanceTimersByTimeAsync(400);
-  click('#ing-results .food-item');
-  const ingredientModal = document.querySelector('#ing-modal')!;
-  expect(ingredientModal.querySelector('img')).toBeNull();
-  expect(ingredientModal.querySelector('#ing-unit-select option[value="0"]')!.textContent).toBe('cup<img alt="measure"> (200g)');
-  expect(ingredientModal.querySelector('#ing-unit-select option[value="1"]')!.textContent).toBe('slice</option><img alt="slice"> (30g)');
-});
-
-it('Log Food add modal and Recipe editor ingredient modal show saved food calories, carbs, protein, and fat as text', async () => {
-  const calories = '11<img alt="calories">';
-  const carbs = '22<img alt="carbs">';
-  const protein = '33<img alt="protein">';
-  const fat = '44<img alt="fat">';
-  const item = food('Apple');
-  item.calories = calories as unknown as number;
-  item.carbs_g = carbs as unknown as number;
-  item.protein_g = protein as unknown as number;
-  item.fat_g = fat as unknown as number;
-  vi.mocked(foods.search).mockResolvedValue({ foods: [item], external: [] });
-
-  const expectAmounts = (root: Element, per: string, total: string) => {
-    expect(root.querySelector('img')).toBeNull();
-    const strongs = [...root.querySelectorAll(`${per} strong`)].map((node) => node.textContent);
-    expect(strongs).toEqual([calories, `${carbs}g`, `${protein}g`, `${fat}g`]);
-    const totals = [...root.querySelectorAll(`${total} span`)].map((node) => node.textContent);
-    expect(totals).toEqual([`${calories} kcal`, `${carbs}g C`, `${protein}g P`, `${fat}g F`]);
-  };
-  const chooseCup = (selector: string) => {
-    const unit = document.querySelector<HTMLSelectElement>(selector)!;
-    unit.value = '0';
-    unit.dispatchEvent(new Event('change'));
-  };
-
-  go('/log');
-  input('#food-search', 'apple');
-  await vi.advanceTimersByTimeAsync(400);
-  click('#tab-content .food-item');
-  const addModal = document.querySelector('#food-detail-modal')!;
-  expectAmounts(addModal, '#modal-per-unit', '#modal-total');
-  input('#servings-input', '3');
-  expectAmounts(addModal, '#modal-per-unit', '#modal-total');
-  chooseCup('#unit-select');
-  expect(addModal.querySelector('#modal-per-label')!.textContent).toBe('Per cup (200g)');
-  expectAmounts(addModal, '#modal-per-unit', '#modal-total');
-
-  go('/recipe');
-  input('#ing-search', 'apple');
-  await vi.advanceTimersByTimeAsync(400);
-  click('#ing-results .food-item');
-  const ingredientModal = document.querySelector('#ing-modal')!;
-  expectAmounts(ingredientModal, '#ing-modal-per-unit', '#ing-modal-total');
-  input('#ing-qty', '4');
-  expectAmounts(ingredientModal, '#ing-modal-per-unit', '#ing-modal-total');
-  chooseCup('#ing-unit-select');
-  expect(ingredientModal.querySelector('#ing-modal-per-label')!.textContent).toBe('Per cup (200g)');
-  expectAmounts(ingredientModal, '#ing-modal-per-unit', '#ing-modal-total');
-
-  const scaled = food('Pear');
-  vi.mocked(foods.search).mockResolvedValue({ foods: [scaled], external: [] });
-  go('/log');
-  input('#food-search', 'pear');
-  await vi.advanceTimersByTimeAsync(400);
-  click('#tab-content .food-item');
-  input('#servings-input', '2');
-  expect([...document.querySelectorAll('#modal-total span')].map((node) => node.textContent)).toEqual(['200 kcal', '20g C', '10g P', '8g F']);
-  chooseCup('#unit-select');
-  expect([...document.querySelectorAll('#modal-per-unit strong')].map((node) => node.textContent)).toEqual(['200', '20g', '10g', '8g']);
-  expect([...document.querySelectorAll('#modal-total span')].map((node) => node.textContent)).toEqual(['400 kcal', '40g C', '20g P', '16g F']);
-
-  go('/recipe');
-  input('#ing-search', 'pear');
-  await vi.advanceTimersByTimeAsync(400);
-  click('#ing-results .food-item');
-  input('#ing-qty', '2');
-  expect([...document.querySelectorAll('#ing-modal-total span')].map((node) => node.textContent)).toEqual(['200 kcal', '20g C', '10g P', '8g F']);
-  chooseCup('#ing-unit-select');
-  expect([...document.querySelectorAll('#ing-modal-per-unit strong')].map((node) => node.textContent)).toEqual(['200', '20g', '10g', '8g']);
-  expect([...document.querySelectorAll('#ing-modal-total span')].map((node) => node.textContent)).toEqual(['400 kcal', '40g C', '20g P', '16g F']);
+  const results = meal ? '#tab-content' : '#ing-results';
+  click(`${results} .food-item`);
+  const body = document.querySelector(meal ? '#modal-body' : '#ing-modal-body')!;
+  const retained = [...body.childNodes];
+  const oldInput = body.querySelector<HTMLInputElement>('input')!;
+  const oldPlus = body.querySelector<HTMLElement>(meal ? '#serv-plus' : '#ing-qty-plus')!;
+  const oldAdd = body.querySelector<HTMLElement>(meal ? '#add-food-btn' : '#ing-add-btn')!;
+  click(meal ? '#modal-close' : '#ing-modal-close');
+  oldPlus.click();
+  expect(oldInput.value).toBe('2');
+  document.querySelectorAll<HTMLElement>(`${results} .food-item`)[1].click();
+  const currentTotal = body.querySelector(meal ? '#modal-total' : '#ing-modal-total')!;
+  expect(body.querySelector<HTMLInputElement>('input')!.value).toBe('1');
+  const oldHost = document.createElement('div');
+  body.append(oldHost);
+  oldHost.append(...retained);
+  const currentText = currentTotal.textContent;
+  oldPlus.click();
+  oldAdd.click();
+  expect(oldInput.value).toBe('2');
+  expect(currentTotal.textContent).toBe(currentText);
+  expect(meals.log).not.toHaveBeenCalled();
+  expect(document.querySelectorAll('.ingredient-row')).toHaveLength(0);
+  oldHost.remove();
+  click(meal ? '#add-food-btn' : '#ing-add-btn');
+  if (meal) expect(meals.log).toHaveBeenCalledWith(expect.objectContaining({ foodId: 2, servings: 1, unitLabel: undefined, unitScale: undefined }));
+  else expect(document.querySelector('.ingredient-name')!.textContent).toBe('Second');
+  await vi.advanceTimersByTimeAsync(0);
 });
 
 it('recipe ingredient list shows the name and unit as text', async () => {

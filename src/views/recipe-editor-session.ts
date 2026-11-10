@@ -1,9 +1,10 @@
 import { recipes as recipesApi, foods as foodsApi } from '../api';
 import { navigate } from '../router';
 import { createFoodSearchSession, type FoodSearchResult } from '../food-search-session';
-import { assignFoodDetailText, assignPerUnitMacros, assignSavedMeasureOptions, assignTotalMacros, macroChips, measureCountSuffix, savedMeasureSuffix, sourceLabel, textSpan } from './food-search-text';
-import type { ExternalFood, Food, FoodMeasure, RecipeIngredient } from '../types';
-import { macrosOf, scaleMacros, recipePerServing, roundMacros, unitScale, caloriesFromMacros } from '../../server/src/nutrition';
+import { macroChips, measureCountSuffix, savedMeasureSuffix, sourceLabel, textSpan } from './food-search-text';
+import { mountFoodQuantitySelection } from './food-quantity-selection';
+import type { ExternalFood, Food, RecipeIngredient } from '../types';
+import { macrosOf, scaleMacros, recipePerServing, roundMacros, caloriesFromMacros } from '../../server/src/nutrition';
 
 
 // A blank manual field is unset. Zero is a real Manual macros value, so it must not collapse to null.
@@ -19,6 +20,7 @@ function manualNumber(raw: string | null | undefined): number | null {
 export function mountRecipeEditor(root: HTMLElement, recipeId: 'new' | number): () => void {
   const isNew = recipeId === 'new';
   let disposed = false;
+  let quantitySelection: ReturnType<typeof mountFoodQuantitySelection> | undefined;
   const events = new AbortController();
   const find = <T extends HTMLElement = HTMLElement>(id: string) => root.querySelector<T>(`#${id}`)!;
   const isLive = () => !disposed && root.isConnected;
@@ -63,102 +65,24 @@ export function mountRecipeEditor(root: HTMLElement, recipeId: 'new' | number): 
     find('ing-modal-name')!.textContent = food.name;
     const body = find('ing-modal-body')!;
 
-    let measures: FoodMeasure[] = [];
-    try { measures = food.measures ? JSON.parse(food.measures) : []; } catch { /* */ }
-    const hasMeasures = measures.length > 0;
-
+    quantitySelection?.dispose();
     body.innerHTML = `
-      ${food.brand ? '<p class="food-brand"></p>' : ''}
-      <div class="modal-macros" id="ing-modal-per-unit"></div>
-      <p class="text-muted" id="ing-modal-per-label"></p>
-      ${hasMeasures ? `<div class="form-group">
-        <label for="ing-unit-select">Unit</label>
-        <select id="ing-unit-select">
-          <option value="default"></option>
-        </select>
-      </div>` : ''}
-      <div class="form-group">
-        <label for="ing-qty">Quantity</label>
-        <div class="servings-control">
-          <button type="button" id="ing-qty-minus" class="btn-icon">-</button>
-          <input type="number" id="ing-qty" value="${isEdit ? (ingredients[editIndex!].qty ?? Math.round(ingredients[editIndex!].servings * 100) / 100) : 1}" min="1" step="1" />
-          <button type="button" id="ing-qty-plus" class="btn-icon">+</button>
-        </div>
-      </div>
-      <div class="modal-total" id="ing-modal-total"></div>
+      <div id="ingredient-quantity"></div>
       <div class="form-row">
         <button type="button" id="ing-add-btn" class="btn btn-primary" style="flex:1">${isEdit ? 'Update' : 'Add Ingredient'}</button>
         ${isEdit ? '<button type="button" id="ing-remove-btn" class="btn btn-danger" style="flex:0 0 auto">Remove</button>' : ''}
       </div>
     `;
-    assignFoodDetailText(
-      body,
-      food,
-      find('ing-modal-per-label')!,
-      root.querySelector('#ing-unit-select option[value="default"]'),
-    );
-    const perUnit = find('ing-modal-per-unit')!;
-    const total = find('ing-modal-total')!;
-    assignPerUnitMacros(perUnit, food);
-
-    let scale = 1;
-    // When editing, recover the unit scale from stored servings and qty
-    if (isEdit) {
-      const editQty = ingredients[editIndex!].qty ?? ingredients[editIndex!].servings;
-      scale = ingredients[editIndex!].servings / editQty;
-    }
-    const qtyInput = find('ing-qty') as HTMLInputElement;
-    const unitSelect = find('ing-unit-select') as HTMLSelectElement | null;
-    if (unitSelect) assignSavedMeasureOptions(unitSelect, measures);
-
-    const updateTotal = () => {
-      const qty = parseFloat(qtyInput.value) || 1;
-      assignTotalMacros(total, food, scale * qty, 'rounded');
-    };
-
-    const updatePerUnit = () => {
-      assignPerUnitMacros(perUnit, food, scale, 'rounded');
-    };
-
-    if (unitSelect) {
-      on(unitSelect, 'change', () => {
-        if (unitSelect.value === 'default') {
-          scale = 1;
-          find('ing-modal-per-label')!.textContent = `Per ${food.serving_size}${food.serving_unit}`;
-        } else {
-          const m = measures[parseInt(unitSelect.value)];
-          scale = unitScale(m.gramWeight, food.serving_size);
-          find('ing-modal-per-label')!.textContent = `Per ${m.label} (${m.gramWeight}g)`;
-        }
-        updatePerUnit();
-        updateTotal();
-      });
-    }
-
-    on(qtyInput, 'input', updateTotal);
-    on(find('ing-qty-minus'), 'click', () => {
-      qtyInput.value = String(Math.max(1, (parseFloat(qtyInput.value) || 1) - 1));
-      updateTotal();
+    const stored = isEdit ? ingredients[editIndex!] : undefined;
+    const selection = mountFoodQuantitySelection(find('ingredient-quantity'), food, {
+      kind: 'ingredient',
+      stored: stored ? { servings: stored.servings, quantity: stored.qty } : undefined,
     });
-    on(find('ing-qty-plus'), 'click', () => {
-      qtyInput.value = String((parseFloat(qtyInput.value) || 1) + 1);
-      updateTotal();
-    });
-
-    // Initial render
-    updateTotal();
-
+    quantitySelection = selection;
     on(find('ing-add-btn'), 'click', () => {
-      const qty = parseFloat(qtyInput.value) || 1;
-      const effectiveServings = qty * scale;
-      const selectedUnit = unitSelect?.value;
-      let unitLabel: string | undefined;
-      if (selectedUnit && selectedUnit !== 'default') {
-        const m = measures[parseInt(selectedUnit)];
-        unitLabel = qty !== 1 ? `${qty}x ${m.label}` : m.label;
-      } else {
-        unitLabel = qty !== 1 ? `${qty}x ${food.serving_size}${food.serving_unit}` : `${food.serving_size}${food.serving_unit}`;
-      }
+      const amount = selection.read();
+      if (!amount) return;
+      const { quantity: qty, servings: effectiveServings, unitLabel } = amount;
       if (isEdit) {
         ingredients[editIndex!] = { foodId: food.id, servings: effectiveServings, qty, food, unitLabel };
       } else {
@@ -171,6 +95,7 @@ export function mountRecipeEditor(root: HTMLElement, recipeId: 'new' | number): 
     });
 
     on(find('ing-remove-btn'), 'click', () => {
+      if (!selection.read()) return;
       ingredients.splice(editIndex!, 1);
       renderIngredients();
       modal.classList.add('hidden');
@@ -486,6 +411,7 @@ export function mountRecipeEditor(root: HTMLElement, recipeId: 'new' | number): 
   return () => {
     if (disposed) return;
     disposed = true;
+    quantitySelection?.dispose();
     session.dispose();
     events.abort();
   };
