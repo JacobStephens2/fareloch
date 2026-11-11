@@ -1,9 +1,8 @@
 import { foods as foodsApi, meals as mealsApi, recipes as recipesApi } from '../api';
 import { navigate } from '../router';
-import { createFoodSearchSession, type FoodSearchResult } from '../food-search-session';
-import { macroChips, measureCountSuffix, savedMeasureSuffix, sourceLabel, textSpan } from './food-search-text';
+import { mountFoodSearch, renderSavedFoodList } from '../food-search-session';
 import { mountFoodQuantitySelection } from './food-quantity-selection';
-import type { Food, ExternalFood, Recipe, MealType } from '../types';
+import type { Food, Recipe, MealType } from '../types';
 import { scaleMacros, roundMacros, caloriesFromMacros } from '../../server/src/nutrition';
 
 // Only physical camera ownership is shared between mounted Log Food sessions.
@@ -172,38 +171,19 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
   on(find('scan-btn'), 'click', openScanner);
   on(find('scanner-close'), 'click', closeScanner);
 
-  const searchInput = find('food-search') as HTMLInputElement;
   const content = find('tab-content')!;
   let activeTab = 'search';
   let tabRevision = 0;
-  const session = createFoodSearchSession({
-    search: (query, onSaved) => foodsApi.search(query, onSaved),
-    loadDefault: async () => ({ foods: (await foodsApi.recent()).foods, external: [] }),
-    onChange: snapshot => {
-      if (!isLive()) return;
-      searchInput.classList.toggle('searching', snapshot.status === 'debouncing' || snapshot.status === 'partial' ||
-        (snapshot.status === 'loading' && snapshot.source === 'search'));
-      if (snapshot.status === 'inactive') return;
-      content.innerHTML = '';
-      if (snapshot.status === 'ready' || snapshot.status === 'partial') {
-        if (snapshot.source === 'default') {
-          if (snapshot.result.foods.length) {
-            content.innerHTML = '<h4 class="section-label">Recent</h4>';
-            renderFoodList(content, snapshot.result.foods, { showSourceLabel: true });
-          } else {
-            content.innerHTML = '<p class="text-muted">Type to search for foods</p>';
-          }
-        } else {
-          renderSearchResults(content, snapshot.result);
-          if (snapshot.status === 'partial') content.insertAdjacentHTML('beforeend', '<p class="text-muted">Searching external foods...</p>');
-        }
-      } else if (snapshot.status === 'error') {
-        content.innerHTML = snapshot.source === 'default'
-          ? '<p class="text-muted">Type to search for foods</p>'
-          : '<p class="form-error">Search failed</p>';
-      } else if (snapshot.status === 'loading' || snapshot.status === 'debouncing') {
-        content.innerHTML = `<div class="loading-spinner">${snapshot.source === 'search' ? 'Searching...' : 'Loading...'}</div>`;
-      }
+  const session = mountFoodSearch(root, {
+    kind: 'meal',
+    foods: foodsApi,
+    onSelect: showAddModal,
+    onQueryInput: () => {
+      ++tabRevision;
+      activeTab = 'search';
+      root.querySelector('.tab.active')?.classList.remove('active');
+      root.querySelector('[data-tab="search"]')!.classList.add('active');
+      session.setActive(true);
     },
   });
 
@@ -224,17 +204,6 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
     });
   });
 
-  // Search input
-  on(searchInput, 'input', () => {
-    ++tabRevision;
-    activeTab = 'search';
-    root.querySelector('.tab.active')?.classList.remove('active');
-    root.querySelector('[data-tab="search"]')!.classList.add('active');
-    session.setQuery(searchInput.value);
-    session.setActive(true);
-  });
-
-
   async function loadTab(content: HTMLElement, tab: string, isCurrent: () => boolean) {
     if (tab === 'recent') {
       content.innerHTML = '<div class="loading-spinner">Loading...</div>';
@@ -245,7 +214,7 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
           content.innerHTML = '<p class="text-muted">No recent foods</p>';
           return;
         }
-        renderFoodList(content, foods);
+        renderSavedFoodList(content, foods, food => { if (isLive()) showAddModal(food); });
       } catch {
         if (!isCurrent()) return;
         content.innerHTML = '<p class="form-error">Failed to load recent foods</p>';
@@ -263,7 +232,7 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
           html += '<p class="text-muted">No custom foods yet</p>';
         }
         content.innerHTML = html;
-        if (foods.length > 0) renderFoodList(content, foods, { append: true });
+        if (foods.length > 0) renderSavedFoodList(content, foods, food => { if (isLive()) showAddModal(food); });
         on(find('create-food-btn'), 'click', () => showCreateFoodForm(() => {
           if (isCurrent()) void loadTab(content, tab, isCurrent);
         }));
@@ -298,35 +267,6 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
     }
   }
 
-  function renderSearchResults(content: HTMLElement, { foods, external }: FoodSearchResult) {
-    let html = '';
-
-    if (foods.length > 0) {
-      html += '<h4 class="section-label">Saved Foods</h4>';
-    }
-    content.innerHTML = html;
-    if (foods.length > 0) renderFoodList(content, foods, { showSourceLabel: true });
-
-    if (external.length > 0) {
-      const extHeader = document.createElement('h4');
-      extHeader.className = 'section-label';
-      extHeader.textContent = 'External Results';
-      content.appendChild(extHeader);
-      renderExternalList(content, external);
-
-      if (external.some(f => f.source === 'fatsecret')) {
-        const attr = document.createElement('div');
-        attr.className = 'api-attribution';
-        attr.innerHTML = '<a href="https://platform.fatsecret.com" target="_blank" rel="noopener">Powered by FatSecret Platform API</a>';
-        content.appendChild(attr);
-      }
-    }
-
-    if (foods.length === 0 && external.length === 0) {
-      content.innerHTML = '<p class="text-muted">No results found</p>';
-    }
-  }
-
   async function lookupBarcode(code: string) {
     const content = find('tab-content')!;
     content.innerHTML = '<div class="loading-spinner">Looking up barcode...</div>';
@@ -346,70 +286,6 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
       missing.append('No product found for barcode ', document.createTextNode(code));
       content.replaceChildren(missing);
     }
-  }
-
-  function renderFoodList(container: HTMLElement, foods: Food[], options: { append?: boolean; showSourceLabel?: boolean } = {}) {
-    const append = options.append ?? false;
-    const showSourceLabel = options.showSourceLabel ?? false;
-    const list = document.createElement('div');
-    list.className = 'food-list';
-
-    for (const food of foods) {
-      const info = document.createElement('div');
-      info.className = 'food-item-info';
-      const servingText = `${food.serving_size}${food.serving_unit}${savedMeasureSuffix(food.measures)}`;
-      const serving = textSpan('food-serving', showSourceLabel ? `${servingText} · ` : servingText);
-      if (showSourceLabel) serving.appendChild(sourceLabel(food.source));
-      info.append(
-        textSpan('food-item-name', food.name),
-        ...(food.brand ? [textSpan('food-brand', food.brand)] : []),
-        serving,
-      );
-      const item = document.createElement('div');
-      item.className = 'food-item';
-      item.append(info, macroChips({ calories: food.calories, carbs: food.carbs_g, protein: food.protein_g, fat: food.fat_g }));
-      on(item, 'click', () => showAddModal(food));
-      list.appendChild(item);
-    }
-
-    if (append) container.appendChild(list);
-    else {
-      const existing = container.querySelector('.food-list');
-      if (existing) existing.replaceWith(list);
-      else container.appendChild(list);
-    }
-  }
-
-  function renderExternalList(container: HTMLElement, items: ExternalFood[]) {
-    const list = document.createElement('div');
-    list.className = 'food-list';
-
-    for (const item of items) {
-      const serving = textSpan('food-serving', `${item.servingSize}${item.servingUnit}${measureCountSuffix(item.measures?.length ?? 0)} · `);
-      serving.appendChild(sourceLabel(item.source));
-      const info = document.createElement('div');
-      info.className = 'food-item-info';
-      info.append(
-        textSpan('food-item-name', item.name),
-        ...(item.brand ? [textSpan('food-brand', item.brand)] : []),
-        serving,
-      );
-      const el = document.createElement('div');
-      el.className = 'food-item';
-      el.append(info, macroChips({ calories: item.calories, carbs: item.carbsG, protein: item.proteinG, fat: item.fatG }));
-      on(el, 'click', async () => {
-        try {
-          const { food } = await foodsApi.saveExternal(item);
-          if (!isLive()) return;
-          showAddModal(food);
-        } catch {
-          if (isLive()) alert('Failed to save food');
-        }
-      });
-      list.appendChild(el);
-    }
-
-    container.appendChild(list);
   }
 
   function renderRecipeList(container: HTMLElement, recipeList: Recipe[]) {
