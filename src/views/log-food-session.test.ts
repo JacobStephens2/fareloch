@@ -3,7 +3,9 @@ import { foods, meals, recipes } from '../api';
 import { route, startRouter } from '../router';
 import { deferred, externalFood, food } from '../test/food-search-fixtures';
 import { change, click, go } from '../test/recipe-editor-fixtures';
+import { departAndReconnect } from '../test/mounted-lifetime-fixtures';
 import { logFoodView } from './log-food';
+import { mountLogFood } from './log-food-session';
 import type { Recipe } from '../types';
 
 const recipe: Recipe = {
@@ -54,6 +56,68 @@ afterEach(() => {
 });
 
 const settle = () => vi.advanceTimersByTimeAsync(0);
+
+it.each(['root', 'ancestor', '#modal-body', '#scanner-video', '[data-tab="quick"]', '#food-search', '#tab-content'])(
+  'retained Back stays retired after synchronous %s departure and reconnection', async departure => {
+  go('/log?date=2026-04-01&meal=lunch');
+  await settle();
+  const root = document.querySelector<HTMLElement>('.log-page')!;
+  const back = document.querySelector<HTMLElement>('#back-btn')!;
+  departAndReconnect(root, departure);
+  back.click();
+  expect(window.location.hash).toBe('#/log?date=2026-04-01&meal=lunch');
+});
+
+it('an initially disconnected Log Food mount stays inert after connection, and a fresh mount is independent', async () => {
+  go('/other');
+  const host = document.createElement('div');
+  host.innerHTML = logFoodView().html;
+  const root = host.querySelector<HTMLElement>('.log-page')!;
+  const before = root.outerHTML;
+  const dispose = mountLogFood(root, '2026-04-01', 'lunch');
+  expect(root.outerHTML).toBe(before);
+  document.querySelector('#app')!.append(root);
+  click('#scan-btn');
+  click('[data-tab="quick"]');
+  click('#back-btn');
+  expect(root.outerHTML).toBe(before);
+  expect(foods.recent).not.toHaveBeenCalled();
+  expect(window.location.hash).toBe('#/other');
+  dispose();
+  dispose();
+  const fresh = mountLogFood(root, '2026-04-01', 'lunch');
+  click('[data-tab="quick"]');
+  expect(root.querySelector('#quick-form')).not.toBeNull();
+  fresh();
+});
+
+it('fixed parent departure stops retained child Macros edits before observer delivery', async () => {
+  go('/log');
+  click('[data-tab="quick"]');
+  change('quick-carbs', '10');
+  const calories = document.querySelector<HTMLInputElement>('#quick-cal')!;
+  const back = document.querySelector('#back-btn')!;
+  back.replaceWith(back.cloneNode(true));
+  change('quick-carbs', '20');
+  expect(calories.value).toBe('40');
+});
+
+it.each(['recent', 'custom', 'recipes'] as const)('%s read cannot render after fixed parent replacement before observer delivery', async tab => {
+  go('/log');
+  await settle();
+  const read = deferred<{ foods: ReturnType<typeof food>[]; recipes: Recipe[] }>();
+  if (tab === 'recipes') vi.mocked(recipes.list).mockReturnValueOnce(read.promise);
+  else vi.mocked(foods[tab]).mockReturnValueOnce(read.promise);
+  click(`[data-tab="${tab}"]`);
+  await settle();
+  read.resolve({ foods: [food('Retired result')], recipes: [recipe] });
+  const back = document.querySelector('#back-btn')!;
+  back.replaceWith(back.cloneNode(true));
+  const root = document.querySelector('.log-page')!;
+  const before = root.outerHTML;
+  await settle();
+  expect(root.outerHTML).toBe(before);
+});
 
 function submitForm(selector: string) {
   document.querySelector(selector)!.dispatchEvent(new Event('submit', { cancelable: true }));
@@ -144,6 +208,27 @@ it.each(staleCases)('$operation $outcome stays silent after $destination', async
   expect(window.alert).not.toHaveBeenCalled();
 });
 
+it.each(['external', 'custom', 'food', 'recipe', 'quick'] as const)(
+  '%s accepted completion is silent after raw departure even before observer delivery', async operation => {
+  for (const outcome of ['success', 'failure']) {
+    for (const departure of ['root', 'ancestor', 'fixed replacement']) {
+      const pending = deferred<typeof completion>();
+      await begin(operation, pending);
+      const root = document.querySelector<HTMLElement>('.log-page')!;
+      const hash = window.location.hash;
+      // Queue the continuation ahead of the mutation observer.
+      if (outcome === 'success') pending.resolve(completion);
+      else pending.reject(new Error('Retired write'));
+      departAndReconnect(root, departure);
+      const oldHTML = root.outerHTML;
+      await settle();
+      expect(root.outerHTML).toBe(oldHTML);
+      expect(window.location.hash).toBe(hash);
+      expect(window.alert).not.toHaveBeenCalled();
+    }
+  }
+});
+
 it.each(['external', 'custom', 'food', 'recipe', 'quick'] as const)('%s retains live failure/retry and success behavior', async operation => {
   const pending = deferred<typeof completion>();
   await begin(operation, pending);
@@ -196,39 +281,48 @@ it.each(['food', 'recipe', 'quick'] as const)('%s submission keeps its captured 
   expect(window.alert).not.toHaveBeenCalled();
 });
 
-it.each(['external', 'custom', 'food', 'recipe', 'quick'] as const)('%s retained controls are inert after disposal', async operation => {
-  const pending = deferred<typeof completion>();
-  await begin(operation, pending);
-  pending.resolve(completion);
-  await settle();
-  // Mount again to retain unsubmitted controls, including dynamically rendered ones.
-  const next = deferred<typeof completion>();
-  await begin(operation, next);
-  const root = document.querySelector('.log-page')!;
-  const retained = [...root.querySelectorAll<HTMLElement>('button, .food-item, input, select, form')];
-  go('/other');
-  const currentHTML = document.querySelector('#app')!.innerHTML;
-  for (const element of retained) {
-    if (element.tagName === 'BUTTON') (element as HTMLButtonElement).disabled = false;
+it.each(['external', 'custom', 'food', 'recipe', 'quick'] as const)('%s retained controls are inert after disposal or reconnection following observer delivery', async operation => {
+  for (const departure of ['disposal', 'raw ancestor']) {
+    const pending = deferred<typeof completion>();
+    await begin(operation, pending);
+    pending.resolve(completion);
+    await settle();
+    // Mount again to retain unsubmitted controls, including dynamically rendered ones.
+    const next = deferred<typeof completion>();
+    await begin(operation, next);
+    const root = document.querySelector('.log-page')!;
+    const retained = [...root.querySelectorAll<HTMLElement>('button, .food-item, input, select, form')];
+    if (departure === 'disposal') go('/other');
+    else {
+      const ancestor = root.parentElement!;
+      ancestor.remove();
+      await settle();
+      document.body.append(ancestor);
+    }
+    const hash = window.location.hash;
+    for (const element of retained) {
+      if (element.tagName === 'BUTTON') (element as HTMLButtonElement).disabled = false;
+    }
+    const currentHTML = document.querySelector('#app')!.innerHTML;
+    const oldHTML = root.innerHTML;
+    vi.clearAllMocks();
+    for (const element of retained) {
+      element.dispatchEvent(new Event(element.tagName === 'FORM' ? 'submit' : 'click', { cancelable: true }));
+      element.dispatchEvent(new Event('input'));
+      element.dispatchEvent(new Event('change'));
+    }
+    next.reject(new Error('Departed'));
+    await settle();
+    expect(foods.search).not.toHaveBeenCalled();
+    expect(foods.saveExternal).not.toHaveBeenCalled();
+    expect(foods.create).not.toHaveBeenCalled();
+    expect(meals.log).not.toHaveBeenCalled();
+    expect(meals.quickLog).not.toHaveBeenCalled();
+    expect(window.alert).not.toHaveBeenCalled();
+    expect(document.querySelector('#app')!.innerHTML).toBe(currentHTML);
+    expect(root.innerHTML).toBe(oldHTML);
+    expect(window.location.hash).toBe(hash);
   }
-  const oldHTML = root.innerHTML;
-  vi.clearAllMocks();
-  for (const element of retained) {
-    element.dispatchEvent(new Event(element.tagName === 'FORM' ? 'submit' : 'click', { cancelable: true }));
-    element.dispatchEvent(new Event('input'));
-    element.dispatchEvent(new Event('change'));
-  }
-  next.reject(new Error('Departed'));
-  await settle();
-  expect(foods.search).not.toHaveBeenCalled();
-  expect(foods.saveExternal).not.toHaveBeenCalled();
-  expect(foods.create).not.toHaveBeenCalled();
-  expect(meals.log).not.toHaveBeenCalled();
-  expect(meals.quickLog).not.toHaveBeenCalled();
-  expect(window.alert).not.toHaveBeenCalled();
-  expect(document.querySelector('#app')!.innerHTML).toBe(currentHTML);
-  expect(root.innerHTML).toBe(oldHTML);
-  expect(window.location.hash).toBe('#/other');
 });
 
 it.each(['quick', 'custom'] as const)('%s replaced form stays inert when reattached, and Quick Add returns with fresh fields', async kind => {

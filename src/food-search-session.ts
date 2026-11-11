@@ -89,11 +89,12 @@ function createFoodSearchSession({ search, loadDefault, onChange }: {
 type Presentation = 'meal' | 'ingredient';
 
 // Query revisions own reads and selectable rows. Submitted saves belong to this mount.
-export function mountFoodSearch(root: HTMLElement, { kind, foods, onSelect, onQueryInput }: {
+export function mountFoodSearch(root: HTMLElement, { kind, foods, onSelect, onQueryInput, isParentLive = () => true }: {
   kind: Presentation;
   foods: Pick<typeof foodOperations, 'search' | 'recent' | 'saveExternal'>;
   onSelect: (food: Food) => void;
   onQueryInput?: () => void;
+  isParentLive?: () => boolean;
 }) {
   const input = root.querySelector<HTMLInputElement>(kind === 'meal' ? '#food-search' : '#ing-search')!;
   const host = root.querySelector<HTMLElement>(kind === 'meal' ? '#tab-content' : '#ing-results')!;
@@ -176,7 +177,9 @@ export function mountFoodSearch(root: HTMLElement, { kind, foods, onSelect, onQu
       }
     },
   });
-  const { isLive, signal, dispose } = createMountedLifetime(root, { cleanup: query.dispose });
+  const { isLive: isMounted, signal, dispose } = createMountedLifetime(root, { cleanup: query.dispose });
+  // A parent's fixed controls can depart while this child's own root stays connected.
+  const isLive = () => isMounted() && isParentLive();
 
   const controls = {
     setQuery(raw: string) {
@@ -203,8 +206,10 @@ export function mountFoodSearch(root: HTMLElement, { kind, foods, onSelect, onQu
 export function mountSavedFoodList(host: HTMLElement, options: {
   read: () => Promise<{ foods: Food[] }>;
   onSelect: (food: Food) => void;
+  isParentLive?: () => boolean;
 } & ({ kind: 'recent' } | { kind: 'custom'; onCreate: () => void })): () => void {
-  const { isLive, signal, dispose } = createMountedLifetime(host);
+  const { isLive: isMounted, signal, dispose } = createMountedLifetime(host);
+  const isLive = () => isMounted() && (options.isParentLive?.() ?? true);
 
   async function load() {
     if (!isLive()) return;

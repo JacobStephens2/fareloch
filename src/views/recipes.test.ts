@@ -3,8 +3,10 @@ import { foods, recipes } from '../api';
 import { route, startRouter } from '../router';
 import { deferred, externalFood, food } from '../test/food-search-fixtures';
 import { change, click, go, submit } from '../test/recipe-editor-fixtures';
+import { departAndReconnect } from '../test/mounted-lifetime-fixtures';
 import type { Recipe, RecipeIngredient } from '../types';
 import { recipeEditView } from './recipes';
+import { mountRecipeEditor } from './recipe-editor-session';
 
 vi.mock('../api', () => ({
   foods: { search: vi.fn(), saveExternal: vi.fn() },
@@ -98,6 +100,93 @@ function act(action: Action) {
   if (action === 'create' || action === 'update') submit();
   else click(action === 'copy' ? '#copy-recipe' : '#delete-recipe');
 }
+
+it.each(['root', 'ancestor', '#recipe-name', '[data-mode="manual"]', '#ingredients-list', '#ing-results', '#manual-macros', '#recipe-totals', '#copy-recipe', '#ing-modal-body'])(
+  'retained Back stays retired after synchronous %s departure and reconnection', async departure => {
+  go('/recipes/1');
+  await settle();
+  const root = document.querySelector<HTMLElement>('.page')!;
+  const back = document.querySelector<HTMLElement>('#back-btn')!;
+  departAndReconnect(root, departure);
+  back.click();
+  expect(window.location.hash).toBe('#/recipes/1');
+});
+
+it('fixed parent departure stops retained ingredient quantity previews before observer delivery', async () => {
+  go('/recipes/1');
+  await settle();
+  click('.ingredient-clickable');
+  const total = document.querySelector('#ing-modal-total')!;
+  const before = total.textContent;
+  const back = document.querySelector('#back-btn')!;
+  back.replaceWith(back.cloneNode(true));
+  click('#ing-qty-plus');
+  expect(input('ing-qty').value).toBe('1');
+  expect(total.textContent).toBe(before);
+});
+
+it('an initially disconnected Recipe editor stays inert after connection, and a fresh mount is independent', async () => {
+  go('/other');
+  const host = document.createElement('div');
+  host.innerHTML = recipeEditView({ id: '1' }).html;
+  const root = host.querySelector<HTMLElement>('.page')!;
+  const before = root.outerHTML;
+  const dispose = mountRecipeEditor(root, 1);
+  expect(root.outerHTML).toBe(before);
+  document.querySelector('#app')!.append(root);
+  click('#back-btn');
+  click('#copy-recipe');
+  submit();
+  expect(root.outerHTML).toBe(before);
+  expect(recipes.get).not.toHaveBeenCalled();
+  expect(recipes.copy).not.toHaveBeenCalled();
+  expect(recipes.update).not.toHaveBeenCalled();
+  expect(window.location.hash).toBe('#/other');
+  dispose();
+  dispose();
+  const fresh = mountRecipeEditor(root, 1);
+  await settle();
+  expect(input('recipe-name').value).toBe('Recipe 1');
+  expect(root.querySelectorAll('.ingredient-row')).toHaveLength(1);
+  fresh();
+});
+
+it.each(['ingredients', 'manual'] as const)('%s hydration cannot publish after fixed replacement before observer delivery', async mode => {
+  const hydration = deferred<ReturnType<typeof loaded>>();
+  vi.mocked(recipes.get).mockReturnValueOnce(hydration.promise);
+  go('/recipes/1');
+  await settle();
+  change('recipe-name', 'Retained draft');
+  const value = loaded();
+  if (mode === 'manual') value.recipe.manual_calories = 200;
+  hydration.resolve(value);
+  const name = input('recipe-name');
+  name.replaceWith(name.cloneNode(true));
+  const root = document.querySelector('.page')!;
+  const before = root.outerHTML;
+  await settle();
+  expect(root.outerHTML).toBe(before);
+  expect(name.value).toBe('Retained draft');
+  expect(input('recipe-name').value).toBe('Retained draft');
+  expect(root.querySelector('#ingredients-list')!.textContent).toBe('');
+  expect(window.alert).not.toHaveBeenCalled();
+});
+
+it.each(['success', 'failure'])('external selection %s is silent after fixed replacement before observer delivery', async outcome => {
+  const saving = deferred<Awaited<ReturnType<typeof foods.saveExternal>>>();
+  vi.mocked(foods.saveExternal).mockReturnValueOnce(saving.promise);
+  go('/recipes/new');
+  await selectExternal();
+  await settle();
+  if (outcome === 'success') saving.resolve({ food: food('Retired selection') });
+  else saving.reject(new Error('Retired selection'));
+  const back = document.querySelector('#back-btn')!;
+  back.replaceWith(back.cloneNode(true));
+  const before = document.querySelector('.page')!.outerHTML;
+  await settle();
+  expect(document.querySelector('.page')!.outerHTML).toBe(before);
+  expect(window.alert).not.toHaveBeenCalled();
+});
 
 it.each(actions)('%s captures inputs and ignores stale successes and failures after departure or remount', async action => {
   for (const destination of ['/recipes/2', '/recipes/new', '/remount', '/other', '/missing']) {
@@ -220,7 +309,7 @@ it('a current external save failure alerts and allows another selection', async 
   expect(document.querySelector('#ing-modal-name')!.textContent).toBe('Saved');
 });
 
-it.each(['/other', '/missing'])('retained static, ingredient, search and modal controls are inert after %s departure', async destination => {
+it.each(['/other', '/missing', 'raw ancestor'])('retained static, ingredient, search and modal controls are inert after %s departure', async destination => {
   go('/recipes/1');
   await settle();
   vi.mocked(foods.search).mockResolvedValue({ foods: [food('Found')], external: [externalFood('External')] });
@@ -231,8 +320,15 @@ it.each(['/other', '/missing'])('retained static, ingredient, search and modal c
   const oldQty = input('ing-qty');
   const oldCalories = input('manual-cal');
   const controls = [...oldRoot.querySelectorAll('button, input, select, form, .ingredient-clickable, .food-item')];
-  go(destination);
-  go(destination); // A second departure consumes no additional editor cleanup.
+  if (destination === 'raw ancestor') {
+    const ancestor = oldRoot.parentElement!;
+    ancestor.remove();
+    await settle();
+    document.body.append(ancestor);
+  } else {
+    go(destination);
+    go(destination); // A second departure consumes no additional editor cleanup.
+  }
   const current = document.querySelector('#app')!.innerHTML;
   const old = oldRoot.outerHTML;
   const operations = actions.map(action => vi.mocked(recipes[action]).mock.calls.length);
@@ -241,7 +337,7 @@ it.each(['/other', '/missing'])('retained static, ingredient, search and modal c
   const confirmations = vi.mocked(window.confirm).mock.calls.length;
   const hash = window.location.hash;
   // Reconnecting retained DOM must not revive a disposed editor.
-  document.body.appendChild(oldRoot);
+  if (!oldRoot.isConnected) document.body.appendChild(oldRoot);
   for (const control of controls) {
     for (const type of ['click', 'input', 'change', 'submit']) {
       control.dispatchEvent(new Event(type, { cancelable: true }));
@@ -258,7 +354,7 @@ it.each(['/other', '/missing'])('retained static, ingredient, search and modal c
   expect(window.confirm).toHaveBeenCalledTimes(confirmations);
   expect(window.alert).not.toHaveBeenCalled();
   expect(window.location.hash).toBe(hash);
-  oldRoot.remove();
+  if (destination !== 'raw ancestor') oldRoot.remove();
 });
 
 it('gram edits after a calorie override immediately refresh Per-serving nutrition and Save', async () => {
@@ -434,21 +530,28 @@ it.each(actions)('%s keeps the mounted identity even when the caller changes its
   await settle();
 });
 
-it.each(actions)('%s completions are silent when the captured root is disconnected before router cleanup', async action => {
-  const pending = deferred<{ recipe: { id: number }; success: boolean }>();
-  vi.mocked(recipes[action]).mockReturnValueOnce(pending.promise);
-  go(action === 'create' ? '/recipes/new' : '/recipes/1');
-  await settle();
-  act(action);
-  const root = document.querySelector('.page')!;
-  root.remove();
-  const detached = root.outerHTML;
-  const hash = window.location.hash;
-  pending.resolve({ recipe: { id: 99 }, success: true });
-  await settle();
-  expect(root.outerHTML).toBe(detached);
-  expect(window.location.hash).toBe(hash);
-  expect(window.alert).not.toHaveBeenCalled();
+it.each(actions)('%s accepted completions stay silent after raw departure and reconnection', async action => {
+  for (const outcome of ['success', 'failure']) {
+    for (const departure of ['root', 'ancestor', 'fixed replacement']) {
+      const pending = deferred<{ recipe: { id: number }; success: boolean }>();
+      vi.mocked(recipes[action]).mockReturnValueOnce(pending.promise);
+      go(action === 'create' ? '/recipes/new' : '/recipes/1');
+      await settle();
+      act(action);
+      await settle();
+      const root = document.querySelector('.page')!;
+      const hash = window.location.hash;
+      // The write has been accepted; only its retired owner's effects end.
+      if (outcome === 'success') pending.resolve({ recipe: { id: 99 }, success: true });
+      else pending.reject(new Error('Retired write'));
+      departAndReconnect(root, departure);
+      const before = root.outerHTML;
+      await settle();
+      expect(root.outerHTML).toBe(before);
+      expect(window.location.hash).toBe(hash);
+      expect(window.alert).not.toHaveBeenCalled();
+    }
+  }
 });
 
 it('a current duplicate can finish while save is pending, without reviving save effects', async () => {

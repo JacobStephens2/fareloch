@@ -66,7 +66,9 @@ it.each(['recent', 'custom'] as const)('signed-in explicit %s uses its existing 
   expect(document.querySelector('#modal-food-name')!.textContent).toBe(`HTTP ${tab}`);
 });
 
-it.each(['food', 'recipe', 'quick'] as const)('guest %s logging preserves captured values when its write settles after departure', async kind => {
+it.each((['food', 'recipe', 'quick'] as const).flatMap(kind =>
+  (['route', 'raw ancestor'] as const).map(departure => ({ kind, departure }))))(
+  'guest $kind logging preserves captured values when its write settles after $departure departure', async ({ kind, departure }) => {
   const network = vi.fn();
   vi.stubGlobal('fetch', network);
   const { food: saved } = await foods.create(food('Guest apple'));
@@ -104,14 +106,20 @@ it.each(['food', 'recipe', 'quick'] as const)('guest %s logging preserves captur
     }
     click('#add-food-btn');
   }
-  go('/log?date=2026-05-02&meal=breakfast');
+  if (departure === 'route') go('/log?date=2026-05-02&meal=breakfast');
+  else {
+    const ancestor = document.querySelector('#app')!;
+    ancestor.remove();
+    document.body.append(ancestor);
+  }
   await settle();
   const current = document.querySelector('#app')!.innerHTML;
   wait.resolve();
   await settle();
   expect(delayed).toHaveBeenCalledTimes(1);
   expect(document.querySelector('#app')!.innerHTML).toBe(current);
-  expect(window.location.hash).toBe('#/log?date=2026-05-02&meal=breakfast');
+  expect(window.location.hash).toBe(departure === 'route'
+    ? '#/log?date=2026-05-02&meal=breakfast' : '#/log?date=2026-04-01&meal=dinner');
   const logged = (await meals.getByDate('2026-04-01')).meals;
   expect(logged).toHaveLength(1);
   expect(logged[0]).toMatchObject({ date: '2026-04-01', meal_type: 'dinner', ...(
