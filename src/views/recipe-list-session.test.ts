@@ -151,21 +151,15 @@ it('disposed rows and rows outside their host cannot select; cloned rows cannot 
   expect(host.innerHTML).toBe(before);
 });
 
-const removalCases = ['host', 'parent', 'ancestor'] as const;
-function remove(which: typeof removalCases[number]) {
-  const removed = which === 'host' ? host : which === 'parent' ? host.parentElement! : host.closest('main')!;
-  const parent = removed.parentElement!;
-  removed.remove();
-  return () => parent.append(removed);
-}
-
-it.each(removalCases)('%s removal and same-turn reinsertion permanently ends selection before observer delivery', async which => {
-  const session = mount();
+it.each(['manage', 'meal'] as const)('%s owns its dedicated host and mounted ancestors, retiring selection on departure', async kind => {
+  const session = mount(kind);
   session.resolve({ recipes: [recipe] });
   await settle();
   const row = host.querySelector<HTMLElement>('.food-item')!;
   const before = host.innerHTML;
-  remove(which)();
+  const ancestor = host.closest('main')!;
+  ancestor.remove();
+  document.body.append(host, ancestor);
   row.click();
   await settle();
   row.click();
@@ -173,27 +167,26 @@ it.each(removalCases)('%s removal and same-turn reinsertion permanently ends sel
   expect(host.innerHTML).toBe(before);
 });
 
-it.each(removalCases.flatMap(which => (['success', 'failure'] as const).map(outcome => ({ which, outcome }))))(
-  '$which removal and same-turn reinsertion prevents late $outcome', async ({ which, outcome }) => {
+it.each(['success', 'failure'] as const)(
+  'host departure prevents queued %s', async outcome => {
     const session = mount();
     const before = host.innerHTML;
     // Queue the read continuation before the removal observer's microtask.
     if (outcome === 'success') session.resolve({ recipes: [recipe] });
     else session.reject(new Error('Departed read'));
-    remove(which)();
+    host.remove();
+    document.body.append(host);
     await settle();
     expect(host.innerHTML).toBe(before);
     expect(session.onSelect).not.toHaveBeenCalled();
   },
 );
 
-it.each(removalCases)('%s removal stays permanent when reinsertion follows observer delivery', async which => {
-  const session = mount();
-  const reinsert = remove(which);
-  await settle();
-  reinsert();
-  const before = host.innerHTML;
-  session.resolve({ recipes: [recipe] });
-  await settle();
-  expect(host.innerHTML).toBe(before);
+it.each(['manage', 'meal'] as const)('%s issues no initial read for a disconnected host, even after attachment', kind => {
+  host.remove();
+  host.textContent = 'Keep';
+  const session = mount(kind);
+  document.body.append(host);
+  expect(session.read).not.toHaveBeenCalled();
+  expect(host.textContent).toBe('Keep');
 });

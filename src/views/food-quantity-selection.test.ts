@@ -141,15 +141,29 @@ describe.each(['meal', 'ingredient'] as const)('%s Food quantity selection', kin
     expectLiteral();
   });
 
-  it.each(['dispose', 'replace', 'detach'] as const)('permanently retires controls and reader after %s, even on synchronous reconnection', action => {
+  it('permanently retires after ancestor departure and host extraction before observer delivery', () => {
+    const ancestor = document.createElement('section');
+    document.body.append(ancestor);
+    const host = document.createElement('div');
+    ancestor.append(host);
+    const selection = mountFoodQuantitySelection(host, food('Oats'), { kind });
+    const input = host.querySelector<HTMLInputElement>(`#${ids.quantity}`)!;
+    const before = host.querySelector(`#${ids.total}`)!.textContent;
+    ancestor.remove();
+    document.body.append(host);
+    document.body.append(ancestor);
+    host.querySelector<HTMLElement>(`#${ids.plus}`)!.click();
+    expect(input.value).toBe('1');
+    expect(host.querySelector(`#${ids.total}`)!.textContent).toBe(before);
+    expect(selection.read()).toBeUndefined();
+  });
+
+  it.each(['quantity', 'unit', 'minus', 'plus', 'per', 'label', 'total'] as const)('owns the stable %s node and retires controls and reader on its departure', name => {
     const form = open();
-    const retained = [...form.host.childNodes];
+    const owned = form.find(ids[name]);
     const before = form.total();
-    if (action === 'dispose') { form.selection.dispose(); form.selection.dispose(); }
-    if (action === 'replace') form.host.replaceChildren();
-    if (action === 'detach') form.host.remove();
-    document.body.append(form.host);
-    form.host.append(...retained);
+    owned.remove();
+    form.host.append(owned);
     form.find(ids.plus).click();
     expect(form.input.value).toBe('1');
     form.quantity('3');

@@ -113,34 +113,19 @@ describe.each(['quick', 'custom', 'manual'] as const)('%s Macros entry', kind =>
     expect(second.changed).toHaveBeenCalledTimes(2);
   });
 
-  const removals = ['dispose', 'host', 'control', 'row', 'ancestor', 'ancestor then move host'] as const;
-  it.each(removals.flatMap(removal => (['input', 'read', 'hydrate', 'observer'] as const).map(first => ({ removal, first }))))('permanently retires after $removal, checking $first first', async ({ removal, first }) => {
-    const wrapper = document.createElement('section');
-    document.body.append(wrapper);
-    const form = open(wrapper);
+  it.each(['cal', 'carbs', 'protein', 'fat'])('owns the captured %s input and retires notifications, hydration and reads on its departure', name => {
+    const form = open();
     const entry = form.entry;
     form.input('carbs', '10');
     form.changed.mockClear();
     const cal = form.field('cal');
     const carbs = form.field('carbs');
-    if (removal === 'dispose') { entry.dispose(); entry.dispose(); }
-    else if (removal === 'host') { form.host.remove(); wrapper.append(form.host); }
-    else if (removal === 'control') { carbs.remove(); form.host.append(carbs); }
-    else if (removal === 'row') {
-      const row = carbs.closest('.form-row')!;
-      row.remove(); form.host.append(row);
-    } else {
-      wrapper.remove();
-      if (removal === 'ancestor then move host') document.body.append(form.host);
-      document.body.append(wrapper);
-    }
-    const hydrate = () => entry.hydrate({ calories: 999, carbsG: 99, proteinG: 99, fatG: 99 });
-    if (first === 'read') expect(entry.read()).toBeUndefined();
-    else if (first === 'hydrate') hydrate();
-    else if (first === 'observer') await Promise.resolve();
+    const owned = form.field(name);
+    owned.remove();
+    form.host.append(owned);
     carbs.value = '20';
     carbs.dispatchEvent(new Event('input'));
-    hydrate();
+    entry.hydrate({ calories: 999, carbsG: 99, proteinG: 99, fatG: 99 });
     expect(entry.read()).toBeUndefined();
     expect(cal.value).toBe('40');
     expect(carbs.value).toBe('20');

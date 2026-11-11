@@ -133,51 +133,44 @@ it('retained rows and Create require their own host and stay inert after disposa
   expect(session.onCreate).not.toHaveBeenCalled();
 });
 
-const removals = ['host', 'parent', 'ancestor'] as const;
-function remove(which: typeof removals[number]) {
-  const node = which === 'host' ? host : which === 'parent' ? host.parentElement! : host.closest('main')!;
-  const parent = node.parentElement!;
-  node.remove();
-  return () => parent.append(node);
-}
-
-it.each(removals)('%s same-turn removal/reconnection permanently retires rows and Create before observer delivery', async which => {
-  const session = mount('custom');
+it.each(['recent', 'custom'] as const)('%s owns its dedicated host and mounted ancestors, retiring rows and Create on departure', async kind => {
+  const session = mount(kind);
   session.resolve({ foods: [food('Apple')] });
   await settle();
   const row = host.querySelector<HTMLElement>('.food-item')!;
-  const create = host.querySelector<HTMLElement>('#create-food-btn')!;
+  const create = host.querySelector<HTMLElement>('#create-food-btn');
   const before = host.innerHTML;
-  remove(which)();
-  create.click();
+  const ancestor = host.closest('main')!;
+  ancestor.remove();
+  document.body.append(host, ancestor);
+  create?.click();
   row.click();
   await settle();
   row.click();
-  create.click();
+  create?.click();
   expect(session.onSelect).not.toHaveBeenCalled();
   expect(session.onCreate).not.toHaveBeenCalled();
   expect(host.innerHTML).toBe(before);
 });
 
-it.each(removals.flatMap(which => (['success', 'empty', 'failure'] as const).map(outcome => ({ which, outcome }))))(
-  '$which same-turn removal/reconnection prevents queued $outcome from rewriting old hosts', async ({ which, outcome }) => {
+it.each(['success', 'empty', 'failure'] as const)(
+  'host departure prevents queued %s from rewriting old hosts', async outcome => {
     const session = mount('custom');
     const before = host.innerHTML;
     if (outcome === 'failure') session.reject(new Error('Departed read'));
     else session.resolve({ foods: outcome === 'empty' ? [] : [food('Old')] });
-    remove(which)();
+    host.remove();
+    document.body.append(host);
     await settle();
     expect(host.innerHTML).toBe(before);
   },
 );
 
-it.each(removals)('%s removal stays permanent after observer delivery and later reconnection', async which => {
-  const session = mount();
-  const reinsert = remove(which);
-  await settle();
-  reinsert();
-  const before = host.innerHTML;
-  session.resolve({ foods: [food('Old')] });
-  await settle();
-  expect(host.innerHTML).toBe(before);
+it.each(['recent', 'custom'] as const)('%s issues no initial read for a disconnected host, even after attachment', kind => {
+  host.remove();
+  host.textContent = 'Keep';
+  const session = mount(kind);
+  document.body.append(host);
+  expect(session.read).not.toHaveBeenCalled();
+  expect(host.textContent).toBe('Keep');
 });

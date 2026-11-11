@@ -1,6 +1,7 @@
 import type { ExternalFood, Food } from './types';
 import type { foods as foodOperations } from './api';
 import { textSpan } from './views/food-search-text';
+import { createMountedLifetime } from './mounted-lifetime';
 
 export interface FoodSearchResult {
   foods: Food[];
@@ -96,27 +97,8 @@ export function mountFoodSearch(root: HTMLElement, { kind, foods, onSelect, onQu
 }) {
   const input = root.querySelector<HTMLInputElement>(kind === 'meal' ? '#food-search' : '#ing-search')!;
   const host = root.querySelector<HTMLElement>(kind === 'meal' ? '#tab-content' : '#ing-results')!;
-  const events = new AbortController();
-  let disposed = false;
   let active = false;
   let rowsRevision = 0;
-  const ancestors = new Set<Node>();
-  for (let node: Node | null = root; node; node = node.parentNode) ancestors.add(node);
-  const departed = (records: MutationRecord[]) => records.some(record =>
-    Array.from(record.removedNodes).some(node => ancestors.has(node)));
-  const departure = new MutationObserver(records => {
-    if (departed(records)) controls.dispose();
-  });
-  departure.observe(root.ownerDocument, { childList: true, subtree: true });
-  const isLive = () => {
-    if (disposed) return false;
-    // Drain removals too: a callback can run before the observer's microtask.
-    if (!root.isConnected || departed(departure.takeRecords())) {
-      controls.dispose();
-      return false;
-    }
-    return true;
-  };
 
   function appendRows(items: (Food | ExternalFood)[]) {
     const current = rowsRevision;
@@ -128,7 +110,7 @@ export function mountFoodSearch(root: HTMLElement, { kind, foods, onSelect, onQu
         if (!isLive() || !active || current !== rowsRevision || !host.contains(row)) return;
         if ('serving_size' in food) onSelect(food);
         else void selectExternal(food);
-      }, { signal: events.signal });
+      }, { signal });
       list.append(row);
     }
     if (kind === 'meal') host.append(list);
@@ -194,6 +176,7 @@ export function mountFoodSearch(root: HTMLElement, { kind, foods, onSelect, onQu
       }
     },
   });
+  const { isLive, signal, dispose } = createMountedLifetime(root, { cleanup: query.dispose });
 
   const controls = {
     setQuery(raw: string) {
@@ -206,19 +189,13 @@ export function mountFoodSearch(root: HTMLElement, { kind, foods, onSelect, onQu
       active = next;
       query.setActive(next);
     },
-    dispose() {
-      if (disposed) return;
-      disposed = true;
-      query.dispose();
-      events.abort();
-      departure.disconnect();
-    },
+    dispose,
   };
   input.addEventListener('input', () => {
     if (!isLive()) return;
     controls.setQuery(input.value);
     onQueryInput?.();
-  }, { signal: events.signal });
+  }, { signal });
   return controls;
 }
 
@@ -227,33 +204,7 @@ export function mountSavedFoodList(host: HTMLElement, options: {
   read: () => Promise<{ foods: Food[] }>;
   onSelect: (food: Food) => void;
 } & ({ kind: 'recent' } | { kind: 'custom'; onCreate: () => void })): () => void {
-  let disposed = false;
-  const events = new AbortController();
-  const ancestors = new Set<Node>();
-  for (let node: Node | null = host; node; node = node.parentNode) ancestors.add(node);
-  const departed = (records: MutationRecord[]) => records.some(record =>
-    Array.from(record.removedNodes).some(node => ancestors.has(node)));
-  const departure = new MutationObserver(records => {
-    if (departed(records)) dispose();
-  });
-  departure.observe(host.ownerDocument, { childList: true, subtree: true });
-
-  function dispose() {
-    if (disposed) return;
-    disposed = true;
-    events.abort();
-    departure.disconnect();
-  }
-
-  function isLive() {
-    if (disposed) return false;
-    // Reads and actions can run before the removal observer's microtask.
-    if (!host.isConnected || departed(departure.takeRecords())) {
-      dispose();
-      return false;
-    }
-    return true;
-  }
+  const { isLive, signal, dispose } = createMountedLifetime(host);
 
   async function load() {
     if (!isLive()) return;
@@ -270,7 +221,7 @@ export function mountSavedFoodList(host: HTMLElement, options: {
         create.textContent = '+ Create Custom Food';
         create.addEventListener('click', () => {
           if (isLive() && host.contains(create)) options.onCreate();
-        }, { signal: events.signal });
+        }, { signal });
         host.append(create);
       }
       if (!foods.length) {
@@ -286,7 +237,7 @@ export function mountSavedFoodList(host: HTMLElement, options: {
         const row = resultRow(food, 'meal', false);
         row.addEventListener('click', () => {
           if (isLive() && host.contains(row)) options.onSelect(food);
-        }, { signal: events.signal });
+        }, { signal });
         list.append(row);
       }
       host.append(list);
