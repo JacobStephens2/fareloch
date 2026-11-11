@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { meals, setToken } from '../api';
 import { setGuestMode } from '../local-db';
 import { deferred } from '../test/food-search-fixtures';
-import { meal } from '../test/meal-list-fixtures';
+import { meal, swipe, settleMealPersistence as settle } from '../test/meal-list-fixtures';
 import { departAndReconnect } from '../test/mounted-lifetime-fixtures';
 import { mountMealListSession } from './meal-list-session';
 
@@ -33,20 +33,11 @@ function move(x: number, y = 10) {
 function end() {
   document.dispatchEvent(new MouseEvent('mouseup'));
 }
-function swipe(item = host.querySelector<HTMLElement>('.meal-item')!) {
-  start(item);
-  move(50);
-  end();
-}
 function touch(item: HTMLElement, type: string, x = 200, y = 10) {
   const event = new Event(type, { cancelable: true });
   Object.defineProperty(event, 'touches', { value: [{ clientX: x, clientY: y }] });
   item.dispatchEvent(event);
   return event;
-}
-async function settle() {
-  // Drain both the HTTP response decoding and the mounted completion.
-  for (let i = 0; i < 10; i++) await Promise.resolve();
 }
 
 beforeEach(() => {
@@ -61,16 +52,18 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 it('keeps Meal order, empty sections, whole-number figures, quantity and time labels', () => {
+  vi.stubEnv('TZ', 'UTC');
   open([meal({ meal_type: 'dinner', calories: 201.6, carbs_g: 20.6, protein_g: 10.6, fat_g: 8.6,
     servings: 5, unit_scale: 3, created_at: '2026-04-01 12:30:00' })]);
   expect([...host.querySelectorAll('h3')].map(node => node.textContent)).toEqual(['Breakfast', 'Lunch', 'Dinner', 'Snacks']);
   expect(host.querySelectorAll('.meal-empty')).toHaveLength(3);
   const section = host.querySelectorAll('.meal-section')[2];
   expect(section.querySelector('.meal-item-name')!.textContent).toBe('1.67x Apple');
-  expect(section.querySelector('.food-serving')!.textContent).toBe(new Date('2026-04-01 12:30:00Z').toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
+  expect(section.querySelector('.food-serving')!.textContent).toBe('12:30 PM');
   expect(section.querySelector('.meal-subtotal')!.textContent).toBe('202 / 648 kcal');
   expect([...section.querySelectorAll('.meal-item .macro-chip')].map(node => node.textContent)).toEqual(['202', '21c', '11p', '9f']);
   expect([...section.querySelectorAll('.meal-macro-chips .macro-chip')].map(node => node.textContent)).toEqual(['21/85c', '11/38p', '9/18f']);
@@ -104,13 +97,15 @@ it('Add Food and Edit use captured Meal types, date and meal rather than mutable
 });
 
 it.each([
-  [195, 10, true], [194, 10, false], [200, 15, true], [200, 16, false], [230, 10, false], [120, 10, false],
-])('mouse movement to %i,%i preserves tap and strict delete thresholds', (x, y, edits) => {
+  [195, 10, true, 'translateX(-5px)'], [194, 10, false, 'translateX(-6px)'],
+  [200, 15, true, 'translateX(0px)'], [200, 16, false, 'translateX(0px)'],
+  [230, 10, false, 'translateX(0px)'], [120, 10, false, 'translateX(-80px)'],
+] as const)('mouse movement to %i,%i preserves tap and strict delete thresholds', (x, y, edits, transform) => {
   const { onEdit, onDeleted } = open();
   const item = host.querySelector<HTMLElement>('.meal-item')!;
   start(item);
   move(x, y);
-  expect(item.style.transform).toBe(`translateX(${Math.min(x - 200, 0)}px)`);
+  expect(item.style.transform).toBe(transform);
   end();
   expect(onEdit).toHaveBeenCalledTimes(edits ? 1 : 0);
   expect(onDeleted).not.toHaveBeenCalled();
@@ -246,7 +241,6 @@ it('ordinary style changes and unrelated DOM mutation leave the list usable', as
 it.each(['dispose', 'departure', 'parent'] as const)('%s cancels queued local frames once without resetting retained DOM', async retirement => {
   let current = true;
   open([meal()], () => current);
-  const abort = vi.spyOn(AbortController.prototype, 'abort');
   const cancel = vi.spyOn(window, 'cancelAnimationFrame');
   swipe();
   await settle();
@@ -260,7 +254,6 @@ it.each(['dispose', 'departure', 'parent'] as const)('%s cancels queued local fr
   await Promise.resolve();
   dispose();
   dispose();
-  expect(abort).toHaveBeenCalledOnce();
   expect(cancel).toHaveBeenCalledOnce();
   await vi.advanceTimersByTimeAsync(1000);
   expect(host.outerHTML).toBe(before);

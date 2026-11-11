@@ -25,3 +25,14 @@ export function meal(overrides: Partial<MealLog> = {}): MealLog {
     ...overrides,
   };
 }
+
+export function swipe(item = document.querySelector<HTMLElement>('.meal-item')!) {
+  item.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 200, clientY: 10 }));
+  document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 50, clientY: 10 }));
+  document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 50, clientY: 10 }));
+}
+
+export async function settleMealPersistence() {
+  // Drain the HTTP response decoding and the mounted completion.
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+}

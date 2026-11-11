@@ -6,6 +6,7 @@ import { state, todayStr } from '../state';
 import { dashboardView } from './dashboard';
 import { deferred } from '../test/food-search-fixtures';
 import { departAndReconnect } from '../test/mounted-lifetime-fixtures';
+import { swipe, settleMealPersistence as settle } from '../test/meal-list-fixtures';
 
 async function showFoodMeal() {
   const { food } = await foods.create({ name: 'Apple', serving_size: 100, serving_unit: 'g', calories: 100, protein_g: 5 });
@@ -18,16 +19,6 @@ async function showFoodMeal() {
 function tap(item: HTMLElement) {
   item.dispatchEvent(new MouseEvent('mousedown', { clientX: 100, clientY: 10 }));
   document.dispatchEvent(new MouseEvent('mouseup', { clientX: 100, clientY: 10 }));
-}
-
-function swipe(item: HTMLElement) {
-  item.dispatchEvent(new MouseEvent('mousedown', { clientX: 200, clientY: 10 }));
-  document.dispatchEvent(new MouseEvent('mousemove', { clientX: 50, clientY: 10 }));
-  document.dispatchEvent(new MouseEvent('mouseup'));
-}
-
-async function settle() {
-  for (let i = 0; i < 10; i++) await Promise.resolve();
 }
 
 it.each(['guest', 'HTTP'] as const)('%s accepted swipe survives same-date replacement before completion or after effects are queued', async adapter => {

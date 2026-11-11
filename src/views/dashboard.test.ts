@@ -4,7 +4,7 @@ import { route, startRouter } from '../router';
 import { state } from '../state';
 import type { MealLog, User } from '../types';
 import { dashboardView } from './dashboard';
-import { meal } from '../test/meal-list-fixtures';
+import { meal, swipe } from '../test/meal-list-fixtures';
 
 vi.mock('../api', () => ({
   meals: { getByDate: vi.fn(), update: vi.fn(), delete: vi.fn(), copy: vi.fn() },
@@ -82,13 +82,6 @@ function toggleWorkout() {
 function tap(item = document.querySelector<HTMLElement>('.meal-item')!) {
   item.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 100, clientY: 10 }));
   document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 100, clientY: 10 }));
-}
-
-function swipe() {
-  const item = document.querySelector<HTMLElement>('.meal-item')!;
-  item.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 200, clientY: 10 }));
-  document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 50, clientY: 10 }));
-  document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 50, clientY: 10 }));
 }
 
 function leaveSelection(how: 'date' | 'return' | 'remount') {

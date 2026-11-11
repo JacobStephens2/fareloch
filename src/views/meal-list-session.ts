@@ -45,11 +45,10 @@ export function mountMealListSession(container: HTMLElement, {
     );
 
     // Per-meal target: daily / 4 (equal split)
-    const tg = targets;
-    const mealTargetCal = tg.cal / 4;
-    const mealTargetC = Math.round(tg.carbs / 4);
-    const mealTargetP = tg.protein / 4;
-    const mealTargetF = Math.round(tg.fat / 4);
+    const mealTargetCal = targets.cal / 4;
+    const mealTargetC = Math.round(targets.carbs / 4);
+    const mealTargetP = targets.protein / 4;
+    const mealTargetF = Math.round(targets.fat / 4);
     const mealStatus = mealPulseStatus(
       { calories: subtotals.cal, carbsG: subtotals.c, proteinG: subtotals.p, fatG: subtotals.f },
       { calories: mealTargetCal, carbsG: mealTargetC, proteinG: mealTargetP, fatG: mealTargetF },
