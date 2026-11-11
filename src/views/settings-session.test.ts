@@ -2,7 +2,7 @@ import { afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { auth } from '../api';
 import { setGuestMode } from '../local-db';
 import { route, startRouter } from '../router';
-import { state } from '../state';
+import { onStateChange, state } from '../state';
 import type { User } from '../types';
 import { deferred } from '../test/food-search-fixtures';
 import { departAndReconnect } from '../test/mounted-lifetime-fixtures';
@@ -108,8 +108,9 @@ it.each(['root', 'fixed replacement'])('Settings permanently retires on same-tur
 });
 
 it.each(['completion first', 'observer first'])('Settings consumes an accepted preset after ancestor retirement with %s', async order => {
-  const pending = deferred<{ user: User }>();
-  const request = vi.spyOn(auth, 'updateProfile').mockReturnValueOnce(pending.promise);
+  const pending = deferred<Response>();
+  const network = vi.fn(() => pending.promise);
+  vi.stubGlobal('fetch', network);
   go('/settings');
   const root = document.querySelector<HTMLElement>('#app .page')!;
   const original = state.user;
@@ -118,18 +119,26 @@ it.each(['completion first', 'observer first'])('Settings consumes an accepted p
   await Promise.resolve();
   const before = root.innerHTML;
   const values = [...root.querySelectorAll('input')].map(control => control.value);
-  if (order === 'completion first') pending.resolve({ user: saved });
-  departAndReconnect(root, 'ancestor');
+  let unsubscribe = () => {};
+  if (order === 'completion first') {
+    unsubscribe = onStateChange(() => {
+      unsubscribe();
+      departAndReconnect(root, 'ancestor');
+    });
+    pending.resolve(Response.json({ user: saved }));
+  }
   if (order === 'observer first') {
+    departAndReconnect(root, 'ancestor');
     await Promise.resolve();
     pending.reject(new Error('Late preset failure'));
   }
   await settle();
+  unsubscribe();
   expect(root.innerHTML).toBe(before);
   expect([...root.querySelectorAll('input')].map(control => control.value)).toEqual(values);
   expect(state.user).toEqual(order === 'completion first' ? saved : original);
   expect(root.querySelector<HTMLButtonElement>('#phase-maintenance')!.disabled).toBe(true);
-  expect(request).toHaveBeenCalledTimes(1);
+  expect(network).toHaveBeenCalledTimes(1);
   expect(vi.getTimerCount()).toBe(0);
 });
 

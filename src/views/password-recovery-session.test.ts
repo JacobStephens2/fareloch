@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { route, startRouter } from '../router';
-import { auth, getToken, setToken } from '../api';
+import { getToken, setToken } from '../api';
 import { getGuestUser, isGuestMode, setGuestMode } from '../local-db';
 import { state } from '../state';
 import { deferred } from '../test/food-search-fixtures';
@@ -76,27 +76,28 @@ it.each(flows.flatMap(flow => ['root', 'fixed replacement'].map(departure => ({ 
   },
 );
 
-it.each(flows.flatMap(flow => ['completion first', 'observer first'].map(order => ({ flow, order }))))(
-  '$flow.kind accepted recovery stays silent after ancestor retirement with $order', async ({ flow, order }) => {
-    const pending = deferred<{ success: boolean }>();
-    const request = vi.spyOn(auth, flow.kind === 'forgot' ? 'forgotPassword' : 'resetPassword').mockReturnValueOnce(pending.promise);
+it.each(flows.flatMap(flow => ['success', 'failure'].map(outcome => ({ flow, outcome }))))(
+  '$flow.kind accepted recovery stays silent after ancestor retirement with $outcome', async ({ flow, outcome }) => {
+    const pending = deferred<Response>();
+    const network = vi.fn(() => pending.promise);
+    vi.stubGlobal('fetch', network);
     go(flow.path);
     const root = document.querySelector<HTMLElement>('#app .auth-container')!;
     begin(flow, root);
     await Promise.resolve();
     const before = snapshot(root);
-    if (order === 'completion first') pending.resolve({ success: true });
     departAndReconnect(root, 'ancestor');
-    if (order === 'observer first') {
-      await Promise.resolve();
-      pending.reject(new Error('Late failure'));
-    }
+    await Promise.resolve();
+    if (outcome === 'success') pending.resolve(Response.json({ success: true }));
+    else pending.reject(new Error('Late failure'));
     await settle();
     await vi.advanceTimersByTimeAsync(2100);
     expect(snapshot(root)).toEqual(before);
     expect(window.location.hash).toBe(`#${flow.path}`);
     submit(root.querySelector('form')!);
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(network).toHaveBeenCalledExactlyOnceWith(flow.endpoint, expect.objectContaining({
+      method: 'POST', body: JSON.stringify(flow.payload), credentials: 'include',
+    }));
     expect(vi.getTimerCount()).toBe(0);
   },
 );

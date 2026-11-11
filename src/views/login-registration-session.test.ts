@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
-import { auth, getToken, setToken } from '../api';
+import { getToken, setToken } from '../api';
 import { getGuestUser, hasSampleData, isGuestMode, localFoods, localMeals, seedSampleData, setGuestMode } from '../local-db';
 import { route, startRouter } from '../router';
 import { onStateChange, state, todayStr } from '../state';
@@ -110,25 +110,35 @@ afterEach(() => {
 
 it.each(flows.flatMap(flow => ['completion first', 'observer first'].map(order => ({ flow, order }))))(
   '$flow.kind accepted authentication survives ancestor retirement with $order', async ({ flow, order }) => {
-    const pending = deferred<{ user: typeof returnedUser }>();
-    const request = vi.spyOn(auth, flow.kind).mockReturnValueOnce(pending.promise);
+    const pending = deferred<Response>();
+    const network = vi.fn(() => pending.promise);
+    vi.stubGlobal('fetch', network);
     go(flow.path);
     const root = document.querySelector<HTMLElement>('#app .auth-container')!;
     begin(flow, root);
     await Promise.resolve();
     const before = snapshot(root);
-    if (order === 'completion first') pending.resolve({ user: returnedUser });
-    departAndReconnect(root, 'ancestor');
+    let unsubscribe = () => {};
+    if (order === 'completion first') {
+      // Application publication is synchronous, before the session's view guard.
+      unsubscribe = onStateChange(() => {
+        unsubscribe();
+        departAndReconnect(root, 'ancestor');
+      });
+      pending.resolve(Response.json({ user: returnedUser }));
+    }
     if (order === 'observer first') {
+      departAndReconnect(root, 'ancestor');
       await Promise.resolve();
       pending.reject(new Error('Late failure'));
     }
     await settle();
+    unsubscribe();
     expect(snapshot(root)).toEqual(before);
     expect(state.user).toEqual(order === 'completion first' ? returnedUser : null);
     expect(window.location.hash).toBe(`#${flow.path}`);
     submit(root.querySelector('form')!);
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(network).toHaveBeenCalledTimes(1);
   },
 );
 

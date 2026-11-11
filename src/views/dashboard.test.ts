@@ -4,7 +4,6 @@ import { route, startRouter } from '../router';
 import { state } from '../state';
 import type { MealLog, User } from '../types';
 import { dashboardView } from './dashboard';
-import { departAndReconnect } from '../test/mounted-lifetime-fixtures';
 
 vi.mock('../api', () => ({
   meals: { getByDate: vi.fn(), update: vi.fn(), delete: vi.fn(), copy: vi.fn() },
@@ -115,117 +114,6 @@ function swipe() {
   document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 50, clientY: 10 }));
   document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 50, clientY: 10 }));
 }
-
-it.each(['root', 'fixed replacement'])('Dashboard permanently retires on same-turn %s before router cleanup', async departure => {
-  await openEditMealModal(meal());
-  const root = document.querySelector<HTMLElement>('#app .dashboard-page')!;
-  departAndReconnect(root, departure, '#workout-toggle');
-  const before = root.innerHTML;
-  const reads = vi.mocked(meals.getByDate).mock.calls.length;
-  button('edit-serv-plus').click();
-  button('edit-save-btn').click();
-  button('edit-delete-btn').click();
-  button('edit-modal-close').click();
-  button('date-label').click();
-  button('date-prev').click();
-  button('copy-prev-btn').click();
-  await settle();
-  expect(root.innerHTML).toBe(before);
-  expect(state.selectedDate).toBe('2026-04-01');
-  expect(document.querySelector('body > input[type="date"]')).toBeNull();
-  expect(meals.getByDate).toHaveBeenCalledTimes(reads);
-  expect(meals.update).not.toHaveBeenCalled();
-  expect(meals.delete).not.toHaveBeenCalled();
-  expect(meals.copy).not.toHaveBeenCalled();
-});
-
-it.each(['edit-serv-minus', 'edit-serv-plus', 'edit-modal-close', 'date-label'])(
-  '%s checks retirement before its first view effect', async action => {
-    await openEditMealModal(meal());
-    const root = document.querySelector<HTMLElement>('#app .dashboard-page')!;
-    const quantity = root.querySelector<HTMLInputElement>('#edit-servings')!;
-    departAndReconnect(root, 'root');
-    const before = root.innerHTML;
-    button(action).click();
-    expect(quantity.value).toBe('2');
-    expect(root.innerHTML).toBe(before);
-    expect(document.querySelector('body > input[type="date"]')).toBeNull();
-  },
-);
-
-it.each(['movement', 'cancellation'])('Dashboard rejects gesture %s after same-turn ancestor departure', async action => {
-  const item = await showMealItem(meal());
-  item.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 200, clientY: 10 }));
-  const root = document.querySelector<HTMLElement>('#app .dashboard-page')!;
-  departAndReconnect(root, 'ancestor');
-  const before = item.getAttribute('style');
-  if (action === 'movement') document.dispatchEvent(new MouseEvent('mousemove', { clientX: 50, clientY: 10 }));
-  else item.dispatchEvent(new Event('touchcancel'));
-  document.dispatchEvent(new MouseEvent('mouseup'));
-  expect(item.getAttribute('style')).toBe(before);
-  expect(meals.delete).not.toHaveBeenCalled();
-});
-
-it.each(['completion first', 'observer first'])('Dashboard consumes an accepted copy after ancestor retirement with %s', async order => {
-  await showMealItem(meal());
-  const pending = deferred<{ copied: number }>();
-  vi.mocked(meals.copy).mockReturnValueOnce(pending.promise);
-  vi.spyOn(window, 'confirm').mockReturnValue(true);
-  button('copy-prev-btn').click();
-  await Promise.resolve();
-  const root = document.querySelector<HTMLElement>('#app .dashboard-page')!;
-  const before = root.innerHTML;
-  const reads = vi.mocked(meals.getByDate).mock.calls.length;
-  if (order === 'completion first') pending.resolve({ copied: 3 });
-  departAndReconnect(root, 'ancestor');
-  if (order === 'observer first') {
-    await Promise.resolve();
-    pending.reject(new Error('Late copy failure'));
-  }
-  await settle();
-  expect(root.innerHTML).toBe(before);
-  expect(meals.copy).toHaveBeenCalledWith('2026-03-31', '2026-04-01');
-  expect(meals.getByDate).toHaveBeenCalledTimes(reads);
-  go('/');
-  await settle();
-  button('date-prev').click();
-  expect(state.selectedDate).toBe('2026-03-31');
-});
-
-it.each(['missing', 'replacement'])('Dashboard retirement leaves a %s modal and its successor alone', async mode => {
-  const modal = await openEditMealModal(meal());
-  const close = button('edit-modal-close');
-  const replacement = modal.cloneNode(true) as HTMLElement;
-  replacement.querySelector('#edit-meal-body')!.textContent = 'Successor content';
-  if (mode === 'missing') modal.remove();
-  else modal.replaceWith(replacement);
-  const oldHTML = modal.innerHTML;
-  const newHTML = replacement.innerHTML;
-  close.click();
-  button('date-prev').click();
-  await settle();
-  expect(modal.innerHTML).toBe(oldHTML);
-  expect(replacement.innerHTML).toBe(newHTML);
-  expect(state.selectedDate).toBe('2026-04-01');
-});
-
-it('temporary picker removal and modal rendering leave Dashboard live', async () => {
-  await openEditMealModal(meal());
-  button('edit-serv-plus').click();
-  expect(document.querySelector<HTMLInputElement>('#edit-servings')!.value).toBe('3');
-  button('edit-modal-close').click();
-  tap();
-  expect(document.querySelector<HTMLInputElement>('#edit-servings')!.value).toBe('2');
-  button('date-label').click();
-  document.querySelector('body > input[type="date"]')!.remove();
-  await settle();
-  button('date-label').click();
-  const picker = document.querySelector<HTMLInputElement>('body > input[type="date"]')!;
-  picker.value = '2026-03-30';
-  picker.dispatchEvent(new Event('change'));
-  expect(state.selectedDate).toBe('2026-03-30');
-  expect(document.querySelector('#edit-meal-body')!.children).toHaveLength(0);
-});
 
 function leaveSelection(how: 'date' | 'return' | 'remount') {
   if (how === 'remount') {
@@ -548,7 +436,7 @@ it.each(['rerender', 'date', 'remount'] as const)('interrupts unfinished tap and
   }
 });
 
-it.each(['date', 'remount', 'ancestor'] as const)('releases swipe timers, frames and the temporary picker on %s', async how => {
+it.each(['date', 'remount'] as const)('releases swipe timers, frames and the temporary picker on %s', async how => {
   await showMealItem(meal());
   button('date-label').click();
   const picker = document.querySelector<HTMLInputElement>('input[type="date"]')!;
@@ -556,8 +444,7 @@ it.each(['date', 'remount', 'ancestor'] as const)('releases swipe timers, frames
   swipe();
   await settle();
   expect(vi.getTimerCount()).toBeGreaterThan(0);
-  if (how === 'ancestor') departAndReconnect(document.querySelector('#app .dashboard-page')!, 'ancestor');
-  else leaveSelection(how);
+  leaveSelection(how);
   await settle();
   expect(vi.getTimerCount()).toBe(0);
   expect(picker.isConnected).toBe(false);

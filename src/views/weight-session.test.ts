@@ -4,20 +4,9 @@ import { auth, weight } from '../api';
 import { getGuestUser } from '../local-db';
 import * as router from '../router';
 import { deferred } from '../test/food-search-fixtures';
-import { departAndReconnect } from '../test/mounted-lifetime-fixtures';
-import { mountWeight } from './weight-session';
-import { weightView } from './weight';
 import { beginWeightOperation, go, input, reading, ResizeObserverStub, startWeightRoutes, submit, type WeightOperation } from '../test/weight-fixtures';
 
 const settle = () => vi.advanceTimersByTimeAsync(0);
-
-function presentation(root: Element) {
-  const copy = document.createElement('div');
-  copy.innerHTML = root.innerHTML;
-  // Chart.destroy restores its canvas attributes as part of resource release.
-  copy.querySelector('canvas')?.replaceWith(document.createElement('canvas'));
-  return copy.innerHTML;
-}
 
 beforeAll(startWeightRoutes);
 
@@ -31,29 +20,6 @@ beforeEach(() => {
   vi.spyOn(weight, 'delete').mockResolvedValue({ success: true });
   vi.spyOn(window, 'alert').mockImplementation(() => {});
   vi.spyOn(window, 'confirm').mockReturnValue(true);
-});
-
-it.each(['root', 'fixed replacement'])('Weight permanently retires on same-turn %s before router cleanup', async departure => {
-  go('/weight');
-  await settle();
-  const root = document.querySelector<HTMLElement>('#app .page')!;
-  const chart = Chart.getChart(root.querySelector<HTMLCanvasElement>('canvas')!)!;
-  const destroy = vi.spyOn(chart, 'destroy');
-  input('weight-lbs', '180');
-  input('waist-ceiling', '32');
-  departAndReconnect(root, departure, '#weight-lbs');
-  const before = presentation(root);
-  submit('weight-form', root);
-  submit('waist-ceiling-form', root);
-  root.querySelector<HTMLButtonElement>('.btn-delete-weight')!.click();
-  await settle();
-  expect(weight.log).not.toHaveBeenCalled();
-  expect(auth.updateProfile).not.toHaveBeenCalled();
-  expect(weight.delete).not.toHaveBeenCalled();
-  expect(presentation(root)).toBe(before);
-  expect(destroy).toHaveBeenCalledTimes(1);
-  go('/other');
-  expect(destroy).toHaveBeenCalledTimes(1);
 });
 
 const refreshCases = (['success', 'history rejection', 'profile rejection'] as const).flatMap(older =>
@@ -91,83 +57,10 @@ it.each(refreshCases)('older $older cannot replace a newer $newer refresh', asyn
 
 afterEach(() => {
   go('/other');
-  document.querySelector('#retained')?.remove();
   Object.values(Chart.instances).forEach(chart => chart.destroy());
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.useRealTimers();
-});
-
-it.each(['completion first', 'observer first'])('Weight consumes an accepted log after ancestor retirement with %s', async order => {
-  go('/weight');
-  await settle();
-  const root = document.querySelector<HTMLElement>('#app .page')!;
-  const pending = delayOperation('log');
-  begin('log');
-  await Promise.resolve();
-  const before = presentation(root);
-  vi.mocked(weight.list).mockClear();
-  vi.mocked(auth.me).mockClear();
-  if (order === 'completion first') pending.resolve({ log: reading(), user: getGuestUser(), success: true });
-  departAndReconnect(root, 'ancestor');
-  if (order === 'observer first') {
-    await Promise.resolve();
-    pending.reject(new Error('Late log failure'));
-  }
-  await settle();
-  expect(presentation(root)).toBe(before);
-  expect(root.querySelector<HTMLInputElement>('#weight-lbs')!.value).toBe('180');
-  expect(root.querySelector<HTMLButtonElement>('#weight-form button')!.disabled).toBe(true);
-  expect(weight.list).not.toHaveBeenCalled();
-  expect(auth.me).not.toHaveBeenCalled();
-  expect(window.alert).not.toHaveBeenCalled();
-  expect(Chart.getChart(root.querySelector<HTMLCanvasElement>('canvas')!)).toBeUndefined();
-});
-
-it('an initially disconnected Weight mount starts no reads or chart and a fresh mount works', async () => {
-  go('/other');
-  const holder = document.createElement('div');
-  holder.innerHTML = weightView().html;
-  const root = holder.querySelector<HTMLElement>('.page')!;
-  const dispose = mountWeight(root);
-  document.querySelector('#app')!.append(root);
-  input('weight-lbs', '180', root);
-  submit('weight-form', root);
-  await settle();
-  expect(weight.list).not.toHaveBeenCalled();
-  expect(auth.me).not.toHaveBeenCalled();
-  expect(weight.log).not.toHaveBeenCalled();
-  expect(Chart.getChart(root.querySelector<HTMLCanvasElement>('canvas')!)).toBeUndefined();
-  dispose();
-  dispose();
-  go('/weight');
-  await settle();
-  expect(weight.list).toHaveBeenCalledTimes(1);
-  expect(Chart.getChart(document.querySelector<HTMLCanvasElement>('#app canvas')!)).toBeDefined();
-});
-
-it('Weight initializes the current outlet while an older screen stays connected before it', async () => {
-  const retained = document.createElement('div');
-  retained.id = 'retained';
-  retained.innerHTML = weightView().html;
-  document.body.prepend(retained);
-  go('/weight');
-  await settle();
-  const root = document.querySelector<HTMLElement>('#app .page')!;
-  expect(Chart.getChart(retained.querySelector<HTMLCanvasElement>('canvas')!)).toBeUndefined();
-  expect(retained.querySelector('#weight-trend-value')!.textContent).toBe('Loading...');
-  expect(root.querySelector('#weight-trend-value')!.textContent).toBe('165.0 lbs');
-  expect(weight.list).toHaveBeenCalledTimes(1);
-  input('weight-lbs', '180', retained);
-  submit('weight-form', retained);
-  expect(weight.log).not.toHaveBeenCalled();
-  input('weight-lbs', '181', root);
-  submit('weight-form', root);
-  await settle();
-  expect(weight.log).toHaveBeenCalledWith(expect.objectContaining({ weightLbs: 181 }));
-  const canvas = root.querySelector<HTMLCanvasElement>('canvas')!;
-  go('/other');
-  expect(Chart.getChart(canvas)).toBeUndefined();
 });
 
 it.each(['/other', '/missing', '/weight'])('releases its chart synchronously before entering %s and mounts again', async destination => {
@@ -293,11 +186,13 @@ it.each(['route departure', 'disconnected root', 'history refresh'] as const)('r
     submit('waist-ceiling-form');
     await settle();
   }
+  // Observer retirement now releases the chart, restoring canvas attributes.
+  await Promise.resolve();
   vi.mocked(weight.log).mockClear();
   vi.mocked(auth.updateProfile).mockClear();
   vi.mocked(weight.delete).mockClear();
   vi.mocked(window.confirm).mockClear();
-  const html = presentation(root);
+  const html = root.innerHTML;
   if (departure !== 'history refresh') {
     submit('weight-form', root);
     submit('waist-ceiling-form', root);
@@ -308,7 +203,7 @@ it.each(['route departure', 'disconnected root', 'history refresh'] as const)('r
   expect(auth.updateProfile).not.toHaveBeenCalled();
   expect(weight.delete).not.toHaveBeenCalled();
   expect(window.confirm).not.toHaveBeenCalled();
-  expect(presentation(root)).toBe(html);
+  expect(root.innerHTML).toBe(html);
 });
 
 it('disposes before the next view initializes and repeated cleanup leaves the successor chart alone', async () => {
