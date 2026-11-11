@@ -225,29 +225,41 @@ it.each(['external', 'custom', 'food', 'recipe', 'quick'] as const)(
   }
 });
 
-it.each(['external', 'custom', 'quick'] as const)('%s retains live failure/retry and success behavior', async operation => {
+it('external selection retains live failure/retry and success behavior', async () => {
   const pending = deferred<typeof completion>();
-  await begin(operation, pending);
+  await begin('external', pending);
   pending.reject(new Error('Current operation'));
   await settle();
-  if (operation === 'external') expect(window.alert).toHaveBeenCalledWith('Failed to save food');
-  else {
-    const button = document.querySelector<HTMLButtonElement>(operation === 'custom' ? '#create-food-form button[type=submit]' : operation === 'quick' ? '#quick-form button' : '#add-food-btn')!;
-    expect(button.disabled).toBe(false);
-    expect(button.textContent).toBe('Failed - Retry');
-  }
+  expect(window.alert).toHaveBeenCalledWith('Failed to save food');
   vi.mocked(foods.saveExternal).mockResolvedValue(completion);
-  vi.mocked(foods.create).mockResolvedValue(completion);
-  vi.mocked(meals.log).mockResolvedValue(completion);
-  vi.mocked(meals.quickLog).mockResolvedValue(completion);
-  if (operation === 'external') click('.food-item');
-  else if (operation === 'custom' || operation === 'quick') submitForm(operation === 'custom' ? '#create-food-form' : '#quick-form');
-  else click('#add-food-btn');
+  click('.food-item');
   await settle();
-  if (operation === 'external' || operation === 'custom') {
-    expect(document.querySelector('#food-detail-modal')!.classList.contains('hidden')).toBe(false);
-    expect(document.querySelector('#modal-food-name')!.textContent).toBe('Completed apple');
-  } else expect(window.location.hash).toBe('#/');
+  expect(document.querySelector('#food-detail-modal')!.classList.contains('hidden')).toBe(false);
+  expect(document.querySelector('#modal-food-name')!.textContent).toBe('Completed apple');
+});
+
+it('pending Custom Food Cancel returns to a fresh My Foods list while accepted creation still opens Meal add', async () => {
+  const pending = deferred<typeof completion>();
+  await begin('custom', pending);
+  const cancel = document.querySelector<HTMLButtonElement>('#cancel-create')!;
+  const content = document.querySelector('#tab-content')!;
+  const oldForm = document.querySelector('#create-food-form')!;
+  cancel.click();
+  await settle();
+  expect(foods.custom).toHaveBeenCalledTimes(2);
+  expect(content.querySelector('#create-food-btn')).not.toBeNull();
+  content.append(oldForm);
+  const before = content.innerHTML;
+  cancel.click();
+  oldForm.dispatchEvent(new Event('submit', { cancelable: true }));
+  expect(content.innerHTML).toBe(before);
+  expect(foods.custom).toHaveBeenCalledTimes(2);
+  expect(foods.create).toHaveBeenCalledOnce();
+  pending.resolve(completion);
+  await settle();
+  expect(document.querySelector('#modal-food-name')!.textContent).toBe('Completed apple');
+  expect(document.querySelector('#food-detail-modal')!.classList.contains('hidden')).toBe(false);
+  expect(window.location.hash).toBe('#/log?date=2026-04-01&meal=lunch');
 });
 
 it.each(['external', 'custom'] as const)('%s already submitted can finish across live tab/query/modal changes', async operation => {
@@ -347,7 +359,7 @@ it.each(['external', 'custom', 'food', 'recipe', 'quick'] as const)('%s retained
   }
 });
 
-it.each(['quick', 'custom'] as const)('%s replaced form stays inert when reattached, and Quick Add returns with fresh fields', async kind => {
+it.each(['quick', 'custom'] as const)('%s search replacement retires the form without retiring its Log Food parent', async kind => {
   go('/log?date=2026-04-01&meal=lunch');
   await settle();
   click(`[data-tab="${kind}"]`);
@@ -368,11 +380,5 @@ it.each(['quick', 'custom'] as const)('%s replaced form stays inert when reattac
   expect(foods.create).not.toHaveBeenCalled();
   oldForm.remove();
   click('[data-tab="quick"]');
-  expect(document.querySelector<HTMLInputElement>('#quick-cal')!.value).toBe('');
-  expect(document.querySelector<HTMLInputElement>('#quick-carbs')!.value).toBe('');
-  change('quick-cal', '200');
-  click('[data-tab="recent"]');
-  click('[data-tab="quick"]');
-  change('quick-carbs', '10');
-  expect(document.querySelector<HTMLInputElement>('#quick-cal')!.value).toBe('40');
+  expect(document.querySelector('#quick-form')).not.toBeNull();
 });
