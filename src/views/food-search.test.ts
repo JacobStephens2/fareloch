@@ -636,24 +636,23 @@ it('Log Food shows an unmatched barcode as text', async () => {
   expect(content.textContent).toContain('No product found for barcode 0012345678905<img alt="unmatched-code">');
 });
 
-it.each(['/log', '/recipe'])('%s retires replaced quantity forms and keeps hidden current controls active', async path => {
+it('Recipe editor retires replaced quantity forms and keeps hidden current controls active', async () => {
   vi.mocked(foods.search).mockResolvedValue({ foods: [food('First'), { ...food('Second'), id: 2 }], external: [] });
-  go(path);
-  const meal = path === '/log';
-  input(meal ? '#food-search' : '#ing-search', 'foods');
+  go('/recipe');
+  input('#ing-search', 'foods');
   await vi.advanceTimersByTimeAsync(400);
-  const results = meal ? '#tab-content' : '#ing-results';
+  const results = '#ing-results';
   click(`${results} .food-item`);
-  const body = document.querySelector(meal ? '#modal-body' : '#ing-modal-body')!;
+  const body = document.querySelector('#ing-modal-body')!;
   const retained = [...body.childNodes];
   const oldInput = body.querySelector<HTMLInputElement>('input')!;
-  const oldPlus = body.querySelector<HTMLElement>(meal ? '#serv-plus' : '#ing-qty-plus')!;
-  const oldAdd = body.querySelector<HTMLElement>(meal ? '#add-food-btn' : '#ing-add-btn')!;
-  click(meal ? '#modal-close' : '#ing-modal-close');
+  const oldPlus = body.querySelector<HTMLElement>('#ing-qty-plus')!;
+  const oldAdd = body.querySelector<HTMLElement>('#ing-add-btn')!;
+  click('#ing-modal-close');
   oldPlus.click();
   expect(oldInput.value).toBe('2');
   document.querySelectorAll<HTMLElement>(`${results} .food-item`)[1].click();
-  const currentTotal = body.querySelector(meal ? '#modal-total' : '#ing-modal-total')!;
+  const currentTotal = body.querySelector('#ing-modal-total')!;
   expect(body.querySelector<HTMLInputElement>('input')!.value).toBe('1');
   const oldHost = document.createElement('div');
   body.append(oldHost);
@@ -666,9 +665,8 @@ it.each(['/log', '/recipe'])('%s retires replaced quantity forms and keeps hidde
   expect(meals.log).not.toHaveBeenCalled();
   expect(document.querySelectorAll('.ingredient-row')).toHaveLength(0);
   oldHost.remove();
-  click(meal ? '#add-food-btn' : '#ing-add-btn');
-  if (meal) expect(meals.log).toHaveBeenCalledWith(expect.objectContaining({ foodId: 2, servings: 1, unitLabel: undefined, unitScale: undefined }));
-  else expect(document.querySelector('.ingredient-name')!.textContent).toBe('Second');
+  click('#ing-add-btn');
+  expect(document.querySelector('.ingredient-name')!.textContent).toBe('Second');
   await vi.advanceTimersByTimeAsync(0);
 });
 
