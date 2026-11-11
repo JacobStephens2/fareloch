@@ -2,7 +2,7 @@ import { recipes as recipesApi, foods as foodsApi } from '../api';
 import { navigate } from '../router';
 import { mountFoodSearch } from '../food-search-session';
 import { textSpan } from './food-search-text';
-import { mountFoodQuantitySelection } from './food-quantity-selection';
+import { mountIngredientEditSession } from './ingredient-edit-session';
 import { mountMacrosEntry } from './macros-entry';
 import { createMountedLifetime } from '../mounted-lifetime';
 import type { Food, RecipeIngredient } from '../types';
@@ -11,7 +11,8 @@ import { macrosOf, scaleMacros, recipePerServing, roundMacros } from '../../serv
 // One mount owns all editor effects, including work that outlives its DOM.
 export function mountRecipeEditor(root: HTMLElement, recipeId: 'new' | number): () => void {
   const isNew = recipeId === 'new';
-  let quantitySelection: ReturnType<typeof mountFoodQuantitySelection> | undefined;
+  let disposeIngredient: (() => void) | undefined;
+  let editedIngredient: (typeof ingredients)[number] | undefined;
   let disposeSearch: (() => void) | undefined;
   let disposeMacros: (() => void) | undefined;
   const find = <T extends HTMLElement = HTMLElement>(id: string) => root.querySelector<T>(`#${id}`)!;
@@ -21,7 +22,7 @@ export function mountRecipeEditor(root: HTMLElement, recipeId: 'new' | number): 
     )],
     cleanup: () => {
       disposeMacros?.();
-      quantitySelection?.dispose();
+      disposeIngredient?.();
       disposeSearch?.();
     },
   });
@@ -46,65 +47,38 @@ export function mountRecipeEditor(root: HTMLElement, recipeId: 'new' | number): 
 
   on(find('back-btn'), 'click', () => navigate('#/recipes'));
 
-  // Ingredient modal close
-  on(find('ing-modal-close'), 'click', () => {
-    find('ing-modal')!.classList.add('hidden');
-  });
-
-  // Show ingredient add/edit modal with unit picker
-  const showIngredientModal = (food: Food | RecipeIngredient, editIndex?: number) => {
+  const showIngredientModal = (food: Food | RecipeIngredient, target?: (typeof ingredients)[number]) => {
     if (!isLive()) return;
-    const isEdit = editIndex !== undefined;
-    const modal = find('ing-modal')!;
-    find('ing-modal-name')!.textContent = food.name;
-    const body = find('ing-modal-body')!;
-
-    quantitySelection?.dispose();
-    body.innerHTML = `
-      <div id="ingredient-quantity"></div>
-      <div class="form-row">
-        <button type="button" id="ing-add-btn" class="btn btn-primary" style="flex:1">${isEdit ? 'Update' : 'Add Ingredient'}</button>
-        ${isEdit ? '<button type="button" id="ing-remove-btn" class="btn btn-danger" style="flex:0 0 auto">Remove</button>' : ''}
-      </div>
-    `;
-    const stored = isEdit ? ingredients[editIndex!] : undefined;
-    const selection = mountFoodQuantitySelection(find('ingredient-quantity'), food, {
-      kind: 'ingredient',
-      isParentLive: isLive,
-      stored: stored ? { servings: stored.servings, quantity: stored.qty } : undefined,
-    });
-    quantitySelection = selection;
-    on(find('ing-add-btn'), 'click', () => {
-      const amount = selection.read();
-      if (!amount) return;
-      const { quantity: qty, servings: effectiveServings, unitLabel } = amount;
-      if (isEdit) {
-        ingredients[editIndex!] = { foodId: food.id, servings: effectiveServings, qty, food, unitLabel };
-      } else {
-        ingredients.push({ foodId: food.id, servings: effectiveServings, qty, food, unitLabel });
-      }
-      renderIngredients();
-      modal.classList.add('hidden');
-      session.setQuery('');
-    });
-
-    on(find('ing-remove-btn'), 'click', () => {
-      if (!selection.read()) return;
-      ingredients.splice(editIndex!, 1);
-      renderIngredients();
-      modal.classList.add('hidden');
-    });
-
-    modal.classList.remove('hidden');
+    disposeIngredient?.();
+    editedIngredient = target;
+    const isEligible = () => isLive() && (!target || ingredients.includes(target));
+    disposeIngredient = mountIngredientEditSession(
+      find('ing-modal'), food,
+      target ? { kind: 'edit', servings: target.servings, quantity: target.qty } : { kind: 'add' },
+      isEligible,
+      action => {
+        // The child has already retired; only the captured parent/target gate this action.
+        if (!isEligible()) return;
+        if (action.kind === 'remove') {
+          if (!target) return;
+          ingredients.splice(ingredients.indexOf(target), 1);
+        } else {
+          const entry = { foodId: food.id, servings: action.servings, qty: action.quantity, food, unitLabel: action.unitLabel };
+          if (target) Object.assign(target, entry);
+          else ingredients.push(entry);
+        }
+        renderIngredients();
+        if (action.kind === 'apply') session.setQuery('');
+      },
+    );
   };
 
   // Edit callback for ingredient rows
-  const onEditIngredient = (idx: number) => {
+  const onEditIngredient = (ing: (typeof ingredients)[number]) => {
     if (!isLive()) return;
-    const ing = ingredients[idx];
     // A loaded ingredient's row identity is different from its Food identity.
     const food = { ...ing.food, id: ing.foodId };
-    showIngredientModal(food, idx);
+    showIngredientModal(food, ing);
   };
 
   // Mode toggle
@@ -321,29 +295,19 @@ export function mountRecipeEditor(root: HTMLElement, recipeId: 'new' | number): 
         <button type="button" class="btn-icon btn-remove-ing" data-idx="${idx}">&times;</button>
       `);
       container.appendChild(el);
+      on(info, 'click', () => onEditIngredient(ing));
+      on(el.querySelector('.btn-remove-ing'), 'click', e => {
+        e.stopPropagation();
+        const index = ingredients.indexOf(ing);
+        if (index < 0) return;
+        if (editedIngredient === ing) disposeIngredient?.();
+        ingredients.splice(index, 1);
+        renderIngredients();
+      });
     });
 
     updateTotals();
 
-    // Edit handlers
-    {
-      container.querySelectorAll('.ingredient-clickable').forEach((el) => {
-        on(el, 'click', () => {
-          const idx = parseInt((el as HTMLElement).dataset.idx || '0');
-          onEditIngredient(idx);
-        });
-      });
-    }
-
-    // Remove handlers
-    container.querySelectorAll('.btn-remove-ing').forEach((btn) => {
-      on(btn, 'click', (e) => {
-        e.stopPropagation();
-        const idx = parseInt((btn as HTMLElement).dataset.idx || '0');
-        ingredients.splice(idx, 1);
-        renderIngredients();
-      });
-    });
   }
 
   return dispose;

@@ -636,37 +636,22 @@ it('Log Food shows an unmatched barcode as text', async () => {
   expect(content.textContent).toContain('No product found for barcode 0012345678905<img alt="unmatched-code">');
 });
 
-it('Recipe editor retires replaced quantity forms and keeps hidden current controls active', async () => {
+it('Recipe search selection after Close opens an independent ingredient session and Add clears results', async () => {
   vi.mocked(foods.search).mockResolvedValue({ foods: [food('First'), { ...food('Second'), id: 2 }], external: [] });
   go('/recipe');
   input('#ing-search', 'foods');
   await vi.advanceTimersByTimeAsync(400);
   const results = '#ing-results';
   click(`${results} .food-item`);
-  const body = document.querySelector('#ing-modal-body')!;
-  const retained = [...body.childNodes];
-  const oldInput = body.querySelector<HTMLInputElement>('input')!;
-  const oldPlus = body.querySelector<HTMLElement>('#ing-qty-plus')!;
-  const oldAdd = body.querySelector<HTMLElement>('#ing-add-btn')!;
   click('#ing-modal-close');
-  oldPlus.click();
-  expect(oldInput.value).toBe('2');
+  expect(document.querySelector<HTMLInputElement>('#ing-search')!.value).toBe('foods');
   document.querySelectorAll<HTMLElement>(`${results} .food-item`)[1].click();
-  const currentTotal = body.querySelector('#ing-modal-total')!;
-  expect(body.querySelector<HTMLInputElement>('input')!.value).toBe('1');
-  const oldHost = document.createElement('div');
-  body.append(oldHost);
-  oldHost.append(...retained);
-  const currentText = currentTotal.textContent;
-  oldPlus.click();
-  oldAdd.click();
-  expect(oldInput.value).toBe('2');
-  expect(currentTotal.textContent).toBe(currentText);
-  expect(meals.log).not.toHaveBeenCalled();
-  expect(document.querySelectorAll('.ingredient-row')).toHaveLength(0);
-  oldHost.remove();
+  expect(document.querySelector('#ing-modal-name')!.textContent).toBe('Second');
+  expect(document.querySelector<HTMLInputElement>('#ing-qty')!.value).toBe('1');
   click('#ing-add-btn');
   expect(document.querySelector('.ingredient-name')!.textContent).toBe('Second');
+  expect(document.querySelector<HTMLInputElement>('#ing-search')!.value).toBe('');
+  expect(document.querySelector(results)!.classList.contains('hidden')).toBe(true);
   await vi.advanceTimersByTimeAsync(0);
 });
 
