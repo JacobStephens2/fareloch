@@ -230,3 +230,33 @@ it.each(['external', 'custom', 'food', 'recipe', 'quick'] as const)('%s retained
   expect(root.innerHTML).toBe(oldHTML);
   expect(window.location.hash).toBe('#/other');
 });
+
+it.each(['quick', 'custom'] as const)('%s replaced form stays inert when reattached, and Quick Add returns with fresh fields', async kind => {
+  go('/log?date=2026-04-01&meal=lunch');
+  await settle();
+  click(`[data-tab="${kind}"]`);
+  if (kind === 'custom') { await settle(); click('#create-food-btn'); }
+  const prefix = kind === 'quick' ? 'quick' : 'cf';
+  change(`${prefix}-carbs`, '10');
+  const oldForm = document.querySelector<HTMLFormElement>(kind === 'quick' ? '#quick-form' : '#create-food-form')!;
+  const oldCarbs = oldForm.querySelector<HTMLInputElement>(`#${prefix}-carbs`)!;
+  const oldCalories = oldForm.querySelector<HTMLInputElement>(`#${prefix}-cal`)!;
+  // A query replaces either form without going through a dedicated entry cleanup path.
+  change('food-search', 'apple');
+  document.querySelector('.log-page')!.append(oldForm);
+  oldCarbs.value = '20';
+  oldCarbs.dispatchEvent(new Event('input'));
+  expect(oldCalories.value).toBe('40');
+  oldForm.dispatchEvent(new Event('submit', { cancelable: true }));
+  expect(meals.quickLog).not.toHaveBeenCalled();
+  expect(foods.create).not.toHaveBeenCalled();
+  oldForm.remove();
+  click('[data-tab="quick"]');
+  expect(document.querySelector<HTMLInputElement>('#quick-cal')!.value).toBe('');
+  expect(document.querySelector<HTMLInputElement>('#quick-carbs')!.value).toBe('');
+  change('quick-cal', '200');
+  click('[data-tab="recent"]');
+  click('[data-tab="quick"]');
+  change('quick-carbs', '10');
+  expect(document.querySelector<HTMLInputElement>('#quick-cal')!.value).toBe('40');
+});

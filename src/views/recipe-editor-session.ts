@@ -3,18 +3,9 @@ import { navigate } from '../router';
 import { mountFoodSearch } from '../food-search-session';
 import { textSpan } from './food-search-text';
 import { mountFoodQuantitySelection } from './food-quantity-selection';
+import { mountMacrosEntry } from './macros-entry';
 import type { Food, RecipeIngredient } from '../types';
-import { macrosOf, scaleMacros, recipePerServing, roundMacros, caloriesFromMacros } from '../../server/src/nutrition';
-
-
-// A blank manual field is unset. Zero is a real Manual macros value, so it must not collapse to null.
-function manualNumber(raw: string | null | undefined): number | null {
-  if (raw == null) return null;
-  const trimmed = raw.trim();
-  if (trimmed === '') return null;
-  const n = Number(trimmed);
-  return Number.isFinite(n) ? n : null;
-}
+import { macrosOf, scaleMacros, recipePerServing, roundMacros } from '../../server/src/nutrition';
 
 // One mount owns all editor effects, including work that outlives its DOM.
 export function mountRecipeEditor(root: HTMLElement, recipeId: 'new' | number): () => void {
@@ -113,22 +104,13 @@ export function mountRecipeEditor(root: HTMLElement, recipeId: 'new' | number): 
     });
   });
 
-  // Auto-calc calories for manual mode
-  const manualCalInput = find('manual-cal') as HTMLInputElement;
-  let manualCalManual = false;
-  on(manualCalInput, 'input', () => { manualCalManual = true; });
-  const autoCalcManual = () => {
-    if (manualCalManual) return;
-    const c = parseFloat((find('manual-carbs') as HTMLInputElement).value) || 0;
-    const p = parseFloat((find('manual-protein') as HTMLInputElement).value) || 0;
-    const f = parseFloat((find('manual-fat') as HTMLInputElement).value) || 0;
-    manualCalInput.value = String(caloriesFromMacros(c, p, f));
-    updateTotals();
-  };
-  ['manual-carbs', 'manual-protein', 'manual-fat'].forEach(id =>
-    on(find(id), 'input', autoCalcManual)
-  );
-  on(manualCalInput, 'input', () => updateTotals());
+  const macrosEntry = mountMacrosEntry(find('manual-macros'), 'manual', updateTotals);
+
+  // Preview and Save share this one read; Ingredients mode leaves all Manual macros unset.
+  function manualMacros() {
+    if (mode === 'ingredients') return { calories: null, carbsG: null, proteinG: null, fatG: null };
+    return macrosEntry.read();
+  }
 
   // Servings/unit changes update totals
   on(find('recipe-servings'), 'input', () => updateTotals());
@@ -143,6 +125,8 @@ export function mountRecipeEditor(root: HTMLElement, recipeId: 'new' | number): 
   // Form submit
   on(find('recipe-form'), 'submit', async (e) => {
     e.preventDefault();
+    const values = manualMacros();
+    if (!values) return;
     const name = (find('recipe-name') as HTMLInputElement).value;
     const totalServings = parseFloat((find('recipe-servings') as HTMLInputElement).value) || 1;
     const servingUnit = (find('recipe-unit') as HTMLInputElement).value.trim() || 'serving';
@@ -151,10 +135,7 @@ export function mountRecipeEditor(root: HTMLElement, recipeId: 'new' | number): 
 
     try {
       const ingData = ingredients.map((i) => ({ foodId: i.foodId, servings: i.servings, qty: i.qty, unitLabel: i.unitLabel }));
-      const manualCalories = mode === 'manual' ? manualNumber(manualCalInput.value) : null;
-      const manualCarbsG = mode === 'manual' ? manualNumber((find('manual-carbs') as HTMLInputElement).value) : null;
-      const manualProteinG = mode === 'manual' ? manualNumber((find('manual-protein') as HTMLInputElement).value) : null;
-      const manualFatG = mode === 'manual' ? manualNumber((find('manual-fat') as HTMLInputElement).value) : null;
+      const { calories: manualCalories, carbsG: manualCarbsG, proteinG: manualProteinG, fatG: manualFatG } = values;
 
       if (isNew) {
         await recipesApi.create({ name, totalServings, servingUnit, ingredients: ingData, manualCalories, manualCarbsG, manualProteinG, manualFatG });
@@ -207,10 +188,10 @@ export function mountRecipeEditor(root: HTMLElement, recipeId: 'new' | number): 
 
       if (recipe.manual_calories != null) {
         // Manual mode
-        (find('manual-cal') as HTMLInputElement).value = String(recipe.manual_calories);
-        (find('manual-carbs') as HTMLInputElement).value = String(recipe.manual_carbs_g ?? '');
-        (find('manual-protein') as HTMLInputElement).value = String(recipe.manual_protein_g ?? '');
-        (find('manual-fat') as HTMLInputElement).value = String(recipe.manual_fat_g ?? '');
+        macrosEntry.hydrate({
+          calories: recipe.manual_calories, carbsG: recipe.manual_carbs_g,
+          proteinG: recipe.manual_protein_g, fatG: recipe.manual_fat_g,
+        });
         mode = 'manual';
         session.setActive(false);
         root.querySelector('[data-mode="ingredients"]')?.classList.remove('active');
@@ -260,16 +241,15 @@ export function mountRecipeEditor(root: HTMLElement, recipeId: 'new' | number): 
     const totalsEl = find('recipe-totals');
     if (!totalsEl) return;
 
-    // Same parsing as the save handler: blank manual calories fall back to the ingredients, and 0 stays 0.
-    const manualValue = (id: string) =>
-      mode === 'manual' ? manualNumber((find(id) as HTMLInputElement)?.value) : null;
+    const values = manualMacros();
+    if (!values) return;
     const perServing = roundMacros(recipePerServing(
       {
         total_servings: servings,
-        manual_calories: manualValue('manual-cal'),
-        manual_carbs_g: manualValue('manual-carbs'),
-        manual_protein_g: manualValue('manual-protein'),
-        manual_fat_g: manualValue('manual-fat'),
+        manual_calories: values.calories,
+        manual_carbs_g: values.carbsG,
+        manual_protein_g: values.proteinG,
+        manual_fat_g: values.fatG,
       },
       ingredients.map((ing) => ({ food: ing.food, servings: ing.servings })),
     ), 'display');
@@ -350,6 +330,7 @@ export function mountRecipeEditor(root: HTMLElement, recipeId: 'new' | number): 
   return () => {
     if (disposed) return;
     disposed = true;
+    macrosEntry.dispose();
     quantitySelection?.dispose();
     session.dispose();
     events.abort();
