@@ -527,8 +527,17 @@ it('ingredient hydration appends loaded rows without retargeting an open local o
   click('#ing-results .food-item');
   click('#ing-add-btn');
   click('.ingredient-clickable');
+  const oldRow = document.querySelector<HTMLElement>('.ingredient-row')!;
+  const modalUpdate = document.querySelector('#ing-add-btn');
   hydration.resolve(loaded());
   await settle();
+  document.querySelector('#ingredients-list')!.append(oldRow);
+  const before = document.querySelector('.page')!.outerHTML;
+  oldRow.querySelector<HTMLElement>('.ingredient-clickable')!.click();
+  oldRow.querySelector<HTMLElement>('.btn-remove-ing')!.click();
+  expect(document.querySelector('.page')!.outerHTML).toBe(before);
+  expect(document.querySelector('#ing-add-btn')).toBe(modalUpdate);
+  oldRow.remove();
   change('ing-qty', '3');
   click('#ing-add-btn');
   expect([...document.querySelectorAll('.ingredient-name')].map(el => el.textContent)).toEqual(['Local apple', 'Ingredient 1']);
