@@ -5,6 +5,7 @@ import { isGuestMode, hasSampleData, dismissSampleData } from '../local-db';
 import type { MealLog, MealType } from '../types';
 import { mealPulseStatus } from '../../server/src/nutrition';
 import { DAILY_CHECKS } from '../../server/src/daily-checks';
+import { createMountedLifetime } from '../mounted-lifetime';
 
 function formatDateSub(dateStr: string): string {
   const d = new Date(dateStr + 'T12:00:00');
@@ -163,8 +164,6 @@ export function dashboardView() {
 // a selection once; no asynchronous callback discovers its date from app state.
 function mountDashboardDateSession(root: HTMLElement, initialDate: string) {
   const find = <T extends Element = HTMLElement>(id: string) => root.querySelector<T>(`#${id}`)!;
-  const mountEvents = new AbortController();
-  const eventOptions = { signal: mountEvents.signal };
   const workoutCache = new Map<string, boolean>();
   const pendingWorkouts = new Map<string, number>();
   const timers = new Set<ReturnType<typeof setTimeout>>();
@@ -175,17 +174,12 @@ function mountDashboardDateSession(root: HTMLElement, initialDate: string) {
   let mealRevision = 0;
   let workoutRevision = 0;
   let dailyChecksRevision = 0;
-  let disposed = false;
   let currentMeals: MealLog[] = [];
   let mealStatus: 'loading' | 'ready' | 'error' = 'loading';
   let isWorkout = false;
   let copyPending = false;
   let picker: HTMLInputElement | undefined;
   let releaseMeals = () => {};
-
-  function isLive() {
-    return !disposed && root.isConnected;
-  }
 
   function syncSummaryVisibility() {
     if (!isLive()) return;
@@ -194,9 +188,6 @@ function mountDashboardDateSession(root: HTMLElement, initialDate: string) {
     const header = root.querySelector<HTMLElement>('.page-header')!;
     find('sticky-day-summary').hidden = find('macro-summary').getBoundingClientRect().top > header.offsetHeight;
   }
-
-  window.addEventListener('scroll', syncSummaryVisibility, { ...eventOptions, passive: true });
-  window.addEventListener('resize', syncSummaryVisibility, eventOptions);
 
   function captureSelection() {
     const current = generation;
@@ -214,12 +205,39 @@ function mountDashboardDateSession(root: HTMLElement, initialDate: string) {
   `;
   const dailyCheckButtons = [...dailyChecksContainer.querySelectorAll<HTMLButtonElement>('[data-check-key]')];
   const dailyChecksStatus = dailyChecksContainer.querySelector<HTMLElement>('[role="status"]')!;
+  const modal = find('edit-meal-modal');
+  const modalBody = find('edit-meal-body');
+  const lifetime = createMountedLifetime(root, {
+    ownedNodes: [
+      ...root.querySelectorAll(`
+        .page-header, #date-prev, #date-next, #date-label, #date-sub,
+        #workout-toggle-wrap, #workout-toggle, #daily-checks,
+        #macro-summary, #macro-summary [id], #cal-remaining,
+        #sticky-day-summary, #sticky-day-summary [id], #copy-prev-btn,
+        #meals-container, #edit-meal-modal, #edit-meal-name, #edit-modal-close, #edit-meal-body
+      `),
+      ...dailyCheckButtons, dailyChecksStatus,
+    ],
+    cleanup: () => {
+      generation++;
+      releaseSelectionResources();
+      workoutCache.clear();
+    },
+  });
+  const { isLive } = lifetime;
+  setCleanup(lifetime.dispose);
+  if (!isLive()) return;
+  const eventOptions = { signal: lifetime.signal };
+  window.addEventListener('scroll', syncSummaryVisibility, { ...eventOptions, passive: true });
+  window.addEventListener('resize', syncSummaryVisibility, eventOptions);
 
   function disableDailyChecks(disabled: boolean) {
+    if (!isLive()) return;
     dailyCheckButtons.forEach(button => { button.disabled = disabled; });
   }
 
   function applyDailyChecks(checks: string[]) {
+    if (!isLive()) return;
     dailyCheckButtons.forEach(button => {
       button.setAttribute('aria-pressed', String(checks.includes(button.dataset.checkKey!)));
     });
@@ -277,6 +295,7 @@ function mountDashboardDateSession(root: HTMLElement, initialDate: string) {
   });
 
   function later(callback: () => void, delay: number) {
+    if (!isLive()) return;
     const isCurrent = captureSelection();
     const timer = setTimeout(() => {
       timers.delete(timer);
@@ -286,6 +305,7 @@ function mountDashboardDateSession(root: HTMLElement, initialDate: string) {
   }
 
   function animate(callback: () => void) {
+    if (!isLive()) return;
     const isCurrent = captureSelection();
     const frame = requestAnimationFrame(() => {
       frames.delete(frame);
@@ -294,7 +314,7 @@ function mountDashboardDateSession(root: HTMLElement, initialDate: string) {
     frames.add(frame);
   }
 
-  function releaseSelection() {
+  function releaseSelectionResources() {
     releaseMeals();
     timers.forEach(timer => clearTimeout(timer));
     timers.clear();
@@ -302,9 +322,6 @@ function mountDashboardDateSession(root: HTMLElement, initialDate: string) {
     frames.clear();
     picker?.remove();
     picker = undefined;
-    find('edit-meal-modal').classList.add('hidden');
-    // Remove old form handlers as well as hiding the modal.
-    find('edit-meal-body').replaceChildren();
   }
 
   function render() {
@@ -342,6 +359,7 @@ function mountDashboardDateSession(root: HTMLElement, initialDate: string) {
   }
 
   async function readWorkout(date: string) {
+    if (!isLive() || date !== selectedDate) return;
     const isCurrent = captureSelection();
     const revision = ++workoutRevision;
     // A read begun during a write must never replace that write's optimistic
@@ -357,6 +375,7 @@ function mountDashboardDateSession(root: HTMLElement, initialDate: string) {
   }
 
   function resetCopyButton() {
+    if (!isLive()) return;
     const button = find<HTMLButtonElement>('copy-prev-btn');
     button.disabled = copyPending;
     button.textContent = copyPending ? 'Copying...' : 'Copy Previous Day';
@@ -365,7 +384,10 @@ function mountDashboardDateSession(root: HTMLElement, initialDate: string) {
   function selectDate(date: string) {
     if (!isLive()) return;
     generation++;
-    releaseSelection();
+    releaseSelectionResources();
+    modal.classList.add('hidden');
+    // Date changes clear the live modal; retirement only releases resources.
+    modalBody.replaceChildren();
     if (date !== selectedDate) currentMeals = [];
     selectedDate = date;
     state.selectedDate = date;
@@ -417,6 +439,7 @@ function mountDashboardDateSession(root: HTMLElement, initialDate: string) {
   }
 
   find('date-label').addEventListener('click', () => {
+    if (!isLive()) return;
     picker?.remove();
     const input = document.createElement('input');
     picker = input;
@@ -428,7 +451,8 @@ function mountDashboardDateSession(root: HTMLElement, initialDate: string) {
     input.style.pointerEvents = 'none';
     document.body.appendChild(input);
     input.addEventListener('change', () => {
-      if (isCurrent() && picker === input && input.value) selectDate(input.value);
+      if (!isCurrent() || picker !== input) return;
+      if (input.value) selectDate(input.value);
       input.remove();
       if (picker === input) picker = undefined;
     }, eventOptions);
@@ -438,8 +462,9 @@ function mountDashboardDateSession(root: HTMLElement, initialDate: string) {
   }, eventOptions);
 
   find('edit-modal-close').addEventListener('click', () => {
-    find('edit-meal-modal').classList.add('hidden');
-    find('edit-meal-body').replaceChildren();
+    if (!isLive()) return;
+    modal.classList.add('hidden');
+    modalBody.replaceChildren();
   }, eventOptions);
 
   find<HTMLButtonElement>('copy-prev-btn').addEventListener('click', async () => {
@@ -470,13 +495,6 @@ function mountDashboardDateSession(root: HTMLElement, initialDate: string) {
     later(resetCopyButton, 2000);
   }, eventOptions);
 
-  setCleanup(() => {
-    disposed = true;
-    generation++;
-    mountEvents.abort();
-    releaseSelection();
-    workoutCache.clear();
-  });
   selectDate(initialDate);
 
   function updateMacroSummary(mealList: MealLog[]) {
@@ -678,7 +696,7 @@ function mountDashboardDateSession(root: HTMLElement, initialDate: string) {
       };
 
       const onMove = (clientX: number, clientY: number) => {
-        if (!swiping) return;
+        if (!canAct() || !swiping) return;
         currentX = clientX - startX;
         if (Math.abs(currentX) > 5 || Math.abs(clientY - startY) > 5) didMove = true;
         if (currentX > 0) currentX = 0; // Only swipe left
@@ -724,12 +742,17 @@ function mountDashboardDateSession(root: HTMLElement, initialDate: string) {
       inner.addEventListener('touchmove', (e) => onMove(e.touches[0].clientX, e.touches[0].clientY), { ...options, passive: true });
       inner.addEventListener('touchend', onEnd, options);
       inner.addEventListener('touchcancel', () => {
+        if (!canAct()) return;
         swiping = false;
         inner.style.transform = 'translateX(0)';
       }, options);
 
       // Mouse fallback for desktop
-      inner.addEventListener('mousedown', (e) => { onStart(e.clientX, e.clientY); e.preventDefault(); }, options);
+      inner.addEventListener('mousedown', (e) => {
+        if (!canAct()) return;
+        onStart(e.clientX, e.clientY);
+        e.preventDefault();
+      }, options);
       document.addEventListener('mousemove', (e) => { if (swiping) onMove(e.clientX, e.clientY); }, options);
       document.addEventListener('mouseup', () => { if (swiping) void onEnd(); }, options);
       events.signal.addEventListener('abort', () => { swiping = false; }, { once: true });
@@ -741,6 +764,7 @@ function mountDashboardDateSession(root: HTMLElement, initialDate: string) {
   }
 
   function showEditMealModal(meal: MealLog, date: string) {
+    if (!isLive()) return;
     const isCurrent = captureSelection();
     const modal = find('edit-meal-modal')!;
     const name = meal.food_name || meal.recipe_name || meal.note || 'Quick entry';
@@ -816,15 +840,17 @@ function mountDashboardDateSession(root: HTMLElement, initialDate: string) {
           <span>${Math.round(perUnitF * qty * 10) / 10}g F</span>
         `;
       };
-      servingsInput.addEventListener('input', updateTotal);
+      servingsInput.addEventListener('input', updateTotal, eventOptions);
       find('edit-serv-minus')!.addEventListener('click', () => {
+        if (!isCurrent() || !servingsInput.isConnected) return;
         servingsInput.value = String(Math.max(1, (parseFloat(servingsInput.value) || 1) - 1));
         updateTotal();
-      });
+      }, eventOptions);
       find('edit-serv-plus')!.addEventListener('click', () => {
+        if (!isCurrent() || !servingsInput.isConnected) return;
         servingsInput.value = String((parseFloat(servingsInput.value) || 1) + 1);
         updateTotal();
-      });
+      }, eventOptions);
 
       readEdit = () => {
         const qty = parseFloat(servingsInput.value) || 1;
@@ -899,7 +925,7 @@ function mountDashboardDateSession(root: HTMLElement, initialDate: string) {
         saveButton.disabled = false;
         saveButton.textContent = 'Failed - Retry';
       }
-    });
+    }, eventOptions);
 
     // Delete button (shared)
     const deleteButton = find('edit-delete-btn')!;
@@ -913,7 +939,7 @@ function mountDashboardDateSession(root: HTMLElement, initialDate: string) {
           void refreshMeals(date);
         } catch { /* ignore */ }
       }
-    });
+    }, eventOptions);
 
     modal.classList.remove('hidden');
   }

@@ -68,7 +68,7 @@ export function weightView() {
       </div>
     `,
     init: () => {
-      const root = document.getElementById('weight-form')!.closest<HTMLElement>('.page')!;
+      const root = document.getElementById('app')!.querySelector<HTMLElement>('.page')!;
       setCleanup(mountWeight(root));
     },
   };

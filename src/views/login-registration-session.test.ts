@@ -1,9 +1,10 @@
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
-import { getToken, setToken } from '../api';
+import { auth, getToken, setToken } from '../api';
 import { getGuestUser, hasSampleData, isGuestMode, localFoods, localMeals, seedSampleData, setGuestMode } from '../local-db';
 import { route, startRouter } from '../router';
 import { onStateChange, state, todayStr } from '../state';
 import { deferred } from '../test/food-search-fixtures';
+import { departAndReconnect } from '../test/mounted-lifetime-fixtures';
 import { loginView, registerView } from './auth';
 import { mountLoginRegistration } from './login-registration-session';
 import html from '../../index.html?raw';
@@ -70,6 +71,26 @@ beforeAll(() => {
   startRouter();
 });
 
+it.each(flows.flatMap(flow => ['root', 'fixed replacement'].map(departure => ({ flow, departure }))))(
+  '$flow.kind permanently retires on same-turn $departure before router cleanup', async ({ flow, departure }) => {
+    const network = vi.fn().mockResolvedValue(new Response(JSON.stringify({ user: returnedUser })));
+    vi.stubGlobal('fetch', network);
+    go(flow.path);
+    const root = document.querySelector<HTMLElement>('#app .auth-container')!;
+    beginDraft(flow, root);
+    departAndReconnect(root, departure, '#email');
+    const before = snapshot(root);
+    submit(root.querySelector('form')!);
+    root.querySelector<HTMLButtonElement>('#guest-btn')?.click();
+    await settle();
+    expect(network).not.toHaveBeenCalled();
+    expect(snapshot(root)).toEqual(before);
+    expect(state.user).toBeNull();
+    expect(isGuestMode()).toBe(false);
+    expect(window.location.hash).toBe(`#${flow.path}`);
+  },
+);
+
 beforeEach(() => {
   localStorage.clear();
   state.user = null;
@@ -82,8 +103,56 @@ afterEach(() => {
   go('/other');
   document.querySelector('#retained')?.remove();
   state.user = null;
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.useRealTimers();
+});
+
+it.each(flows.flatMap(flow => ['completion first', 'observer first'].map(order => ({ flow, order }))))(
+  '$flow.kind accepted authentication survives ancestor retirement with $order', async ({ flow, order }) => {
+    const pending = deferred<{ user: typeof returnedUser }>();
+    const request = vi.spyOn(auth, flow.kind).mockReturnValueOnce(pending.promise);
+    go(flow.path);
+    const root = document.querySelector<HTMLElement>('#app .auth-container')!;
+    begin(flow, root);
+    await Promise.resolve();
+    const before = snapshot(root);
+    if (order === 'completion first') pending.resolve({ user: returnedUser });
+    departAndReconnect(root, 'ancestor');
+    if (order === 'observer first') {
+      await Promise.resolve();
+      pending.reject(new Error('Late failure'));
+    }
+    await settle();
+    expect(snapshot(root)).toEqual(before);
+    expect(state.user).toEqual(order === 'completion first' ? returnedUser : null);
+    expect(window.location.hash).toBe(`#${flow.path}`);
+    submit(root.querySelector('form')!);
+    expect(request).toHaveBeenCalledTimes(1);
+  },
+);
+
+it.each(flows)('initially disconnected $kind mounts stay retired and a fresh mount works', async flow => {
+  const network = vi.fn().mockResolvedValue(new Response(JSON.stringify({ user: returnedUser })));
+  vi.stubGlobal('fetch', network);
+  go('/other');
+  const holder = document.createElement('div');
+  holder.innerHTML = (flow.kind === 'login' ? loginView() : registerView()).html;
+  const root = holder.querySelector<HTMLElement>('.auth-container')!;
+  disposeSession = mountLoginRegistration(root, flow.kind);
+  document.querySelector('#app')!.append(root);
+  begin(flow, root);
+  root.querySelector<HTMLButtonElement>('#guest-btn')?.click();
+  await settle();
+  expect(network).not.toHaveBeenCalled();
+  expect(state.user).toBeNull();
+  disposeSession();
+  disposeSession();
+  go(flow.path);
+  begin(flow);
+  await settle();
+  expect(network).toHaveBeenCalledTimes(1);
+  expect(state.user).toEqual(returnedUser);
 });
 
 it.each(flows)('live $kind captures one submission and becomes terminal before router replacement', async flow => {

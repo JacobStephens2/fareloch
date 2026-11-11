@@ -1,22 +1,26 @@
 import { auth } from '../api';
 import { navigate } from '../router';
+import { createMountedLifetime } from '../mounted-lifetime';
 
 type RecoveryMode = { kind: 'forgot' } | { kind: 'reset'; token: string };
 
 export function mountPasswordRecovery(root: HTMLElement, mode: RecoveryMode): () => void {
   const kind = mode.kind;
   const token = mode.kind === 'reset' ? mode.token : '';
-  let disposed = false;
   let pending = false;
   let resetSucceeded = false;
   let redirect: ReturnType<typeof setTimeout> | undefined;
-  const events = new AbortController();
   const form = root.querySelector<HTMLFormElement>(`#${kind}-form`)!;
   const input = form.querySelector<HTMLInputElement>(kind === 'forgot' ? '#email' : '#password')!;
   const button = form.querySelector<HTMLButtonElement>('button')!;
   const message = form.querySelector<HTMLElement>(`#${kind}-msg`)!;
   const error = form.querySelector<HTMLElement>(`#${kind}-error`)!;
-  const isLive = () => !disposed && root.isConnected && root.contains(form);
+  const lifetime = createMountedLifetime(root, {
+    ownedNodes: [form, input, button, message, error],
+    cleanup: () => { clearTimeout(redirect); },
+  });
+  const { isLive } = lifetime;
+  if (!isLive()) return lifetime.dispose;
 
   form.addEventListener('submit', async event => {
     event.preventDefault();
@@ -51,12 +55,7 @@ export function mountPasswordRecovery(root: HTMLElement, mode: RecoveryMode): ()
         button.disabled = resetSucceeded;
       }
     }
-  }, { signal: events.signal });
+  }, { signal: lifetime.signal });
 
-  return () => {
-    if (disposed) return;
-    disposed = true;
-    events.abort();
-    clearTimeout(redirect);
-  };
+  return lifetime.dispose;
 }

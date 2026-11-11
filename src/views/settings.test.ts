@@ -18,7 +18,7 @@ afterEach(() => {
 
 function showSettings() {
   const view = settingsView();
-  document.body.innerHTML = view.html;
+  document.body.innerHTML = `<div id="app">${view.html}</div>`;
   view.init();
 }
 

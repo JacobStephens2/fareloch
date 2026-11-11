@@ -5,6 +5,7 @@ import { route, startRouter } from '../router';
 import { state } from '../state';
 import type { User } from '../types';
 import { deferred } from '../test/food-search-fixtures';
+import { departAndReconnect } from '../test/mounted-lifetime-fixtures';
 import { settingsView } from './settings';
 import { mountSettingsForms } from './settings-form-session';
 
@@ -45,6 +46,7 @@ afterEach(() => {
   disposeForms = undefined;
   go('/other');
   state.user = null;
+  document.querySelector('#retained')?.remove();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.useRealTimers();
@@ -88,6 +90,91 @@ function begin(flow: typeof flows[number], root: ParentNode = document) {
   if (flow.form) submit(flow.form, root);
   else root.querySelector<HTMLButtonElement>('#phase-maintenance')!.click();
 }
+
+it.each(['root', 'fixed replacement'])('Settings permanently retires on same-turn %s before router cleanup', async departure => {
+  const network = vi.fn().mockResolvedValue(new Response(JSON.stringify({ user: state.user })));
+  vi.stubGlobal('fetch', network);
+  go('/settings');
+  const root = document.querySelector<HTMLElement>('#app .page')!;
+  departAndReconnect(root, departure, '#s-name');
+  for (const flow of flows) begin(flow, root);
+  input('s-current-pw', 'current', root);
+  input('s-new-pw', 'new-password', root);
+  const before = root.innerHTML;
+  submit('password-form', root);
+  await settle();
+  expect(network).not.toHaveBeenCalled();
+  expect(root.innerHTML).toBe(before);
+});
+
+it.each(['completion first', 'observer first'])('Settings consumes an accepted preset after ancestor retirement with %s', async order => {
+  const pending = deferred<{ user: User }>();
+  const request = vi.spyOn(auth, 'updateProfile').mockReturnValueOnce(pending.promise);
+  go('/settings');
+  const root = document.querySelector<HTMLElement>('#app .page')!;
+  const original = state.user;
+  const saved = { ...state.user!, ...flows[3].payload };
+  begin(flows[3], root);
+  await Promise.resolve();
+  const before = root.innerHTML;
+  const values = [...root.querySelectorAll('input')].map(control => control.value);
+  if (order === 'completion first') pending.resolve({ user: saved });
+  departAndReconnect(root, 'ancestor');
+  if (order === 'observer first') {
+    await Promise.resolve();
+    pending.reject(new Error('Late preset failure'));
+  }
+  await settle();
+  expect(root.innerHTML).toBe(before);
+  expect([...root.querySelectorAll('input')].map(control => control.value)).toEqual(values);
+  expect(state.user).toEqual(order === 'completion first' ? saved : original);
+  expect(root.querySelector<HTMLButtonElement>('#phase-maintenance')!.disabled).toBe(true);
+  expect(request).toHaveBeenCalledTimes(1);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it('initially disconnected Settings forms stay retired and a fresh mount works', async () => {
+  const network = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ user: state.user }))));
+  vi.stubGlobal('fetch', network);
+  go('/other');
+  const holder = document.createElement('div');
+  holder.innerHTML = settingsView().html;
+  const root = holder.querySelector<HTMLElement>('.page')!;
+  disposeForms = mountSettingsForms(root);
+  document.querySelector('#app')!.append(root);
+  for (const flow of flows) begin(flow, root);
+  submit('password-form', root);
+  await settle();
+  expect(network).not.toHaveBeenCalled();
+  expect(vi.getTimerCount()).toBe(0);
+  disposeForms();
+  disposeForms();
+  go('/settings');
+  begin(flows[0]);
+  await settle();
+  expect(network).toHaveBeenCalledTimes(1);
+  expect(document.querySelector('#app #profile-msg')!.textContent).toBe('Profile saved!');
+});
+
+it('Settings initializes forms in the current outlet while an older screen stays connected before it', async () => {
+  const network = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ user: state.user }))));
+  vi.stubGlobal('fetch', network);
+  const retained = document.createElement('div');
+  retained.id = 'retained';
+  retained.innerHTML = settingsView().html;
+  document.body.prepend(retained);
+  go('/settings');
+  begin(flows[0], retained);
+  expect(network).not.toHaveBeenCalled();
+  const root = document.querySelector<HTMLElement>('#app .page')!;
+  begin(flows[0], root);
+  await settle();
+  expect(network).toHaveBeenCalledTimes(1);
+  expect(root.querySelector('#profile-msg')!.textContent).toBe('Profile saved!');
+  expect(retained.querySelector('#profile-msg')!.textContent).toBe('');
+  go('/other');
+  expect(vi.getTimerCount()).toBe(0);
+});
 
 const completionCases = flows.flatMap(flow =>
   (['success', 'failure'] as const).flatMap(outcome =>
@@ -318,7 +405,7 @@ it.each(['disposed', 'disconnected', 'route departure'] as const)('retained cont
   expect(network).not.toHaveBeenCalled();
 });
 
-it('disposal clears every feedback timer without changing retained messages', async () => {
+it.each(['route', 'ancestor'])('%s retirement clears every feedback timer without changing retained messages', async departure => {
   vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(url.endsWith('change-password') ? { success: true } : { user: state.user }))));
   go('/settings');
   for (const flow of flows) {
@@ -331,7 +418,11 @@ it('disposal clears every feedback timer without changing retained messages', as
   for (const message of [...flows.map(flow => flow.message), 'pw-msg']) {
     expect(root.querySelector(`#${message}`)!.classList.contains('hidden')).toBe(false);
   }
-  go('/other');
+  if (departure === 'route') go('/other');
+  else {
+    departAndReconnect(root, 'ancestor');
+    await Promise.resolve();
+  }
   expect(vi.getTimerCount()).toBe(0);
   const html = root.innerHTML;
   await vi.advanceTimersByTimeAsync(5000);

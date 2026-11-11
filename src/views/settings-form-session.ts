@@ -2,19 +2,31 @@ import { auth } from '../api';
 import { state, setState } from '../state';
 import type { User } from '../types';
 import { phaseTargetPresets } from '../../server/src/nutrition';
+import { createMountedLifetime } from '../mounted-lifetime';
 
 export function mountSettingsForms(root: HTMLElement): () => void {
-  let disposed = false;
-  const events = new AbortController();
   const timers = new Map<HTMLElement, ReturnType<typeof setTimeout>>();
-  const isLive = () => !disposed && root.isConnected;
+  const forms = [...root.querySelectorAll('#profile-form, #targets-form, #workout-targets-form, #password-form')];
+  const lifetime = createMountedLifetime(root, {
+    ownedNodes: [
+      ...forms,
+      ...forms.flatMap(form => [...form.querySelectorAll('input, button, #profile-msg, #targets-msg, #workout-targets-msg, #pw-msg')]),
+      ...root.querySelectorAll('#phase-presets, #phase-presets button, #phase-presets-msg'),
+    ],
+    cleanup: () => {
+      timers.forEach(timer => clearTimeout(timer));
+      timers.clear();
+    },
+  });
+  const { isLive } = lifetime;
+  if (!isLive()) return lifetime.dispose;
   const find = <T extends HTMLElement = HTMLElement>(id: string) => root.querySelector<T>(`#${id}`)!;
   const input = (id: string) => find<HTMLInputElement>(id);
 
   function on(element: Element, type: string, handler: (event: Event) => void) {
     element.addEventListener(type, event => {
       if (isLive() && root.contains(element)) handler(event);
-    }, { signal: events.signal });
+    }, { signal: lifetime.signal });
   }
 
   function showMessage(element: HTMLElement, text: string, type: 'success' | 'error') {
@@ -126,11 +138,5 @@ export function mountSettingsForms(root: HTMLElement): () => void {
     });
   }
 
-  return () => {
-    if (disposed) return;
-    disposed = true;
-    events.abort();
-    timers.forEach(timer => clearTimeout(timer));
-    timers.clear();
-  };
+  return lifetime.dispose;
 }
