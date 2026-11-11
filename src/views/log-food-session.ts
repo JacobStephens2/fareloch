@@ -1,6 +1,6 @@
 import { foods as foodsApi, meals as mealsApi, recipes as recipesApi } from '../api';
 import { navigate } from '../router';
-import { mountFoodSearch, renderSavedFoodList } from '../food-search-session';
+import { mountFoodSearch, mountSavedFoodList } from '../food-search-session';
 import { mountFoodQuantitySelection } from './food-quantity-selection';
 import { mountMacrosEntry } from './macros-entry';
 import { mountRecipeList } from './recipe-list-session';
@@ -24,6 +24,7 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
   let quantitySelection: ReturnType<typeof mountFoodQuantitySelection> | undefined;
   let macrosEntry: ReturnType<typeof mountMacrosEntry> | undefined;
   let disposeRecipeList: (() => void) | undefined;
+  let disposeSavedFoodList: (() => void) | undefined;
   const events = new AbortController();
   const isLive = () => !disposed && root.isConnected;
   const find = <T extends HTMLElement = HTMLElement>(id: string) => root.querySelector<T>(`#${id}`)!;
@@ -184,6 +185,7 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
     onSelect: showAddModal,
     onQueryInput: () => {
       disposeRecipeList?.();
+      disposeSavedFoodList?.();
       ++tabRevision;
       activeTab = 'search';
       root.querySelector('.tab.active')?.classList.remove('active');
@@ -203,6 +205,7 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
       activeTab = (tab as HTMLElement).dataset.tab || 'search';
       const current = ++tabRevision;
       disposeRecipeList?.();
+      disposeSavedFoodList?.();
       session.setActive(activeTab === 'search');
       if (activeTab === 'recipes') {
         const host = document.createElement('div');
@@ -211,55 +214,21 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
         disposeRecipeList = mountRecipeList(host, {
           kind: 'meal', read: recipesApi.list, onSelect: showRecipeAddModal,
         });
-      } else if (activeTab !== 'search') {
-        void loadTab(content, activeTab, () => isLive() && current === tabRevision);
-      }
+      } else if (activeTab === 'recent' || activeTab === 'custom') {
+        showSavedFoodList(activeTab, current);
+      } else if (activeTab === 'quick') showQuickAddForm(content);
     });
   });
 
-  async function loadTab(content: HTMLElement, tab: string, isCurrent: () => boolean) {
-    if (tab === 'recent') {
-      content.innerHTML = '<div class="loading-spinner">Loading...</div>';
-      try {
-        const { foods } = await foodsApi.recent();
-        if (!isCurrent()) return;
-        if (foods.length === 0) {
-          content.innerHTML = '<p class="text-muted">No recent foods</p>';
-          return;
-        }
-        renderSavedFoodList(content, foods, food => { if (isLive()) showAddModal(food); });
-      } catch {
-        if (!isCurrent()) return;
-        content.innerHTML = '<p class="form-error">Failed to load recent foods</p>';
-      }
-      return;
-    }
-
-    if (tab === 'custom') {
-      content.innerHTML = '<div class="loading-spinner">Loading...</div>';
-      try {
-        const { foods } = await foodsApi.custom();
-        if (!isCurrent()) return;
-        let html = '<button id="create-food-btn" class="btn btn-outline btn-block" style="margin-bottom:12px">+ Create Custom Food</button>';
-        if (foods.length === 0) {
-          html += '<p class="text-muted">No custom foods yet</p>';
-        }
-        content.innerHTML = html;
-        if (foods.length > 0) renderSavedFoodList(content, foods, food => { if (isLive()) showAddModal(food); });
-        on(find('create-food-btn'), 'click', () => showCreateFoodForm(() => {
-          if (isCurrent()) void loadTab(content, tab, isCurrent);
-        }));
-      } catch {
-        if (!isCurrent()) return;
-        content.innerHTML = '<p class="form-error">Failed to load foods</p>';
-      }
-      return;
-    }
-
-    if (tab === 'quick') {
-      showQuickAddForm(content);
-      return;
-    }
+  function showSavedFoodList(kind: 'recent' | 'custom', current: number) {
+    disposeSavedFoodList?.();
+    const host = document.createElement('div');
+    content.replaceChildren(host);
+    disposeSavedFoodList = mountSavedFoodList(host, kind === 'recent'
+      ? { kind, read: foodsApi.recent, onSelect: showAddModal }
+      : { kind, read: foodsApi.custom, onSelect: showAddModal, onCreate: () => showCreateFoodForm(() => {
+        if (isLive() && current === tabRevision) showSavedFoodList(kind, current);
+      }) });
   }
 
   async function lookupBarcode(code: string) {
@@ -506,6 +475,7 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
     if (disposed) return;
     disposed = true;
     disposeRecipeList?.();
+    disposeSavedFoodList?.();
     macrosEntry?.dispose();
     quantitySelection?.dispose();
     ++tabRevision;
