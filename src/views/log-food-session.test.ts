@@ -3,6 +3,7 @@ import { foods, meals, recipes } from '../api';
 import { route, startRouter } from '../router';
 import { deferred, externalFood, food } from '../test/food-search-fixtures';
 import { change, click, go } from '../test/recipe-editor-fixtures';
+import { departAndReconnect } from '../test/mounted-lifetime-fixtures';
 import { logFoodView } from './log-food';
 import { mountLogFood } from './log-food-session';
 import type { Recipe } from '../types';
@@ -61,11 +62,8 @@ it.each(['root', 'ancestor', '#modal-body', '#scanner-video', '[data-tab="quick"
   go('/log?date=2026-04-01&meal=lunch');
   await settle();
   const root = document.querySelector<HTMLElement>('.log-page')!;
-  const node = departure === 'root' ? root : departure === 'ancestor' ? root.parentElement! : root.querySelector(departure)!;
-  const parent = node.parentNode!;
   const back = document.querySelector<HTMLElement>('#back-btn')!;
-  node.remove();
-  parent.append(node);
+  departAndReconnect(root, departure);
   back.click();
   expect(window.location.hash).toBe('#/log?date=2026-04-01&meal=lunch');
 });
@@ -221,10 +219,7 @@ it.each(['external', 'custom', 'food', 'recipe', 'quick'] as const)(
       // Queue the continuation ahead of the mutation observer.
       if (outcome === 'success') pending.resolve(completion);
       else pending.reject(new Error('Retired write'));
-      const node = departure === 'root' ? root : departure === 'ancestor' ? root.parentElement! : root.querySelector('#back-btn')!;
-      const parent = node.parentNode!;
-      node.remove();
-      parent.append(departure === 'fixed replacement' ? node.cloneNode(true) : node);
+      departAndReconnect(root, departure);
       const oldHTML = root.outerHTML;
       await settle();
       expect(root.outerHTML).toBe(oldHTML);

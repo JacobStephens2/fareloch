@@ -3,6 +3,7 @@ import { foods, recipes } from '../api';
 import { route, startRouter } from '../router';
 import { deferred, externalFood, food } from '../test/food-search-fixtures';
 import { change, click, go, submit } from '../test/recipe-editor-fixtures';
+import { departAndReconnect } from '../test/mounted-lifetime-fixtures';
 import type { Recipe, RecipeIngredient } from '../types';
 import { recipeEditView } from './recipes';
 import { mountRecipeEditor } from './recipe-editor-session';
@@ -105,11 +106,8 @@ it.each(['root', 'ancestor', '#recipe-name', '[data-mode="manual"]', '#ingredien
   go('/recipes/1');
   await settle();
   const root = document.querySelector<HTMLElement>('.page')!;
-  const node = departure === 'root' ? root : departure === 'ancestor' ? root.parentElement! : root.querySelector(departure)!;
-  const parent = node.parentNode!;
   const back = document.querySelector<HTMLElement>('#back-btn')!;
-  node.remove();
-  parent.append(node);
+  departAndReconnect(root, departure);
   back.click();
   expect(window.location.hash).toBe('#/recipes/1');
 });
@@ -546,10 +544,7 @@ it.each(actions)('%s accepted completions stay silent after raw departure and re
       // The write has been accepted; only its retired owner's effects end.
       if (outcome === 'success') pending.resolve({ recipe: { id: 99 }, success: true });
       else pending.reject(new Error('Retired write'));
-      const node = departure === 'root' ? root : departure === 'ancestor' ? root.parentElement! : root.querySelector('#back-btn')!;
-      const parent = node.parentNode!;
-      node.remove();
-      parent.append(departure === 'fixed replacement' ? node.cloneNode(true) : node);
+      departAndReconnect(root, departure);
       const before = root.outerHTML;
       await settle();
       expect(root.outerHTML).toBe(before);
