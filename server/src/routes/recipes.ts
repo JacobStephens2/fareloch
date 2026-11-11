@@ -3,6 +3,7 @@ import { getDb } from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
 import { recipePerServing, roundMacros } from '../nutrition.js';
 import { recipeIngredientRows } from '../recipe-ingredients.js';
+import { createRecipe, updateRecipe, copyRecipe } from '../recipe-mutations.js';
 
 const router = Router();
 
@@ -53,28 +54,14 @@ router.get('/:id', requireAuth, (req: Request, res: Response) => {
 router.post('/', requireAuth, (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const { name, totalServings, servingUnit, ingredients, manualCalories, manualCarbsG, manualProteinG, manualFatG } = req.body;
+    const { name } = req.body;
     if (!name) {
       res.status(400).json({ error: 'Name is required' });
       return;
     }
 
-    const result = db.prepare(
-      'INSERT INTO recipes (user_id, name, total_servings, serving_unit, manual_calories, manual_carbs_g, manual_protein_g, manual_fat_g) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-    ).run(
-      req.user!.userId, name, totalServings || 1, servingUnit || 'serving',
-      manualCalories ?? null, manualCarbsG ?? null, manualProteinG ?? null, manualFatG ?? null
-    );
-    const recipeId = result.lastInsertRowid;
-
-    if (ingredients && Array.isArray(ingredients)) {
-      const insert = db.prepare('INSERT INTO recipe_ingredients (recipe_id, food_id, servings, qty, unit_label) VALUES (?, ?, ?, ?, ?)');
-      for (const ing of ingredients) {
-        insert.run(recipeId, ing.foodId, ing.servings || 1, ing.qty ?? null, ing.unitLabel ?? null);
-      }
-    }
-
-    res.json({ recipe: { id: recipeId, name, totalServings: totalServings || 1 } });
+    const recipe = createRecipe(db, req.user!.userId, req.body);
+    res.json({ recipe });
   } catch (e) {
     console.error('Create recipe error:', e);
     res.status(500).json({ error: 'Failed to create recipe' });
@@ -82,37 +69,13 @@ router.post('/', requireAuth, (req: Request, res: Response) => {
 });
 
 // Update recipe
-router.put('/:id', requireAuth, (req: Request, res: Response) => {
+router.put('/:id', requireAuth, (req: Request<{ id: string }>, res: Response) => {
   try {
     const db = getDb();
-    const recipe = db.prepare('SELECT * FROM recipes WHERE id = ? AND user_id = ?').get(req.params.id, req.user!.userId);
-    if (!recipe) {
+    const result = updateRecipe(db, req.user!.userId, req.params.id, req.body);
+    if (!result.saved) {
       res.status(404).json({ error: 'Recipe not found' });
       return;
-    }
-
-    const { name, totalServings, servingUnit, ingredients, manualCalories, manualCarbsG, manualProteinG, manualFatG } = req.body;
-    db.prepare(`
-      UPDATE recipes SET
-        name = COALESCE(?, name),
-        total_servings = COALESCE(?, total_servings),
-        serving_unit = COALESCE(?, serving_unit),
-        manual_calories = ?,
-        manual_carbs_g = ?,
-        manual_protein_g = ?,
-        manual_fat_g = ?
-      WHERE id = ?
-    `).run(name, totalServings, servingUnit,
-           manualCalories ?? null, manualCarbsG ?? null, manualProteinG ?? null, manualFatG ?? null,
-           req.params.id);
-
-    // Replace ingredients if provided
-    if (ingredients && Array.isArray(ingredients)) {
-      db.prepare('DELETE FROM recipe_ingredients WHERE recipe_id = ?').run(req.params.id);
-      const insert = db.prepare('INSERT INTO recipe_ingredients (recipe_id, food_id, servings, qty, unit_label) VALUES (?, ?, ?, ?, ?)');
-      for (const ing of ingredients) {
-        insert.run(req.params.id, ing.foodId, ing.servings || 1, ing.qty ?? null, ing.unitLabel ?? null);
-      }
     }
 
     res.json({ success: true });
@@ -123,30 +86,16 @@ router.put('/:id', requireAuth, (req: Request, res: Response) => {
 });
 
 // Copy recipe
-router.post('/:id/copy', requireAuth, (req: Request, res: Response) => {
+router.post('/:id/copy', requireAuth, (req: Request<{ id: string }>, res: Response) => {
   try {
     const db = getDb();
-    const recipe = db.prepare('SELECT * FROM recipes WHERE id = ? AND user_id = ?').get(req.params.id, req.user!.userId) as any;
+    const recipe = copyRecipe(db, req.user!.userId, req.params.id);
     if (!recipe) {
       res.status(404).json({ error: 'Recipe not found' });
       return;
     }
 
-    const result = db.prepare(
-      'INSERT INTO recipes (user_id, name, total_servings, serving_unit, manual_calories, manual_carbs_g, manual_protein_g, manual_fat_g) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-    ).run(
-      req.user!.userId, recipe.name + ' (Copy)', recipe.total_servings, recipe.serving_unit,
-      recipe.manual_calories, recipe.manual_carbs_g, recipe.manual_protein_g, recipe.manual_fat_g
-    );
-    const newId = result.lastInsertRowid;
-
-    const ingredients = db.prepare('SELECT * FROM recipe_ingredients WHERE recipe_id = ?').all(recipe.id) as any[];
-    const insert = db.prepare('INSERT INTO recipe_ingredients (recipe_id, food_id, servings, qty, unit_label) VALUES (?, ?, ?, ?, ?)');
-    for (const ing of ingredients) {
-      insert.run(newId, ing.food_id, ing.servings, ing.qty, ing.unit_label);
-    }
-
-    res.json({ recipe: { id: newId } });
+    res.json({ recipe });
   } catch (e) {
     console.error('Copy recipe error:', e);
     res.status(500).json({ error: 'Failed to copy recipe' });
