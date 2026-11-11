@@ -100,8 +100,10 @@ export function mountFoodSearch(root: HTMLElement, { kind, foods, onSelect, onQu
   let disposed = false;
   let active = false;
   let rowsRevision = 0;
+  const ancestors = new Set<Node>();
+  for (let node: Node | null = root; node; node = node.parentNode) ancestors.add(node);
   const departed = (records: MutationRecord[]) => records.some(record =>
-    Array.from(record.removedNodes).some(node => node === root || node.contains(root)));
+    Array.from(record.removedNodes).some(node => ancestors.has(node)));
   const departure = new MutationObserver(records => {
     if (departed(records)) controls.dispose();
   });

@@ -356,3 +356,44 @@ it.each(['success', 'failure'] as const)('departure permanently suppresses a sub
   expect(operations.saveExternal).toHaveBeenCalledTimes(1);
   expect(operations.search).toHaveBeenCalledTimes(1);
 });
+
+it.each(['success', 'failure'] as const)('ancestor departure permanently suppresses a submitted save before reconnecting the extracted root: %s', async outcome => {
+  const wrapper = document.createElement('main');
+  const root = document.createElement('section');
+  root.innerHTML = '<input id="ing-search"><div id="ing-results" class="hidden"></div>';
+  wrapper.append(root);
+  document.body.append(wrapper);
+  const pending = deferred<{ food: ReturnType<typeof food> }>();
+  const operations = {
+    search: vi.fn(async () => ({ foods: [], external: [externalFood('Apple')] })),
+    recent: vi.fn(async () => ({ foods: [] })),
+    saveExternal: vi.fn(() => pending.promise),
+  };
+  const selected = vi.fn();
+  const alert = vi.spyOn(window, 'alert').mockImplementation(() => {});
+  const session = mountFoodSearch(root, {
+    kind: 'ingredient', foods: operations, onSelect: selected,
+  });
+  disposals.push(session.dispose);
+  session.setActive(true);
+  session.setQuery('apple');
+  await vi.advanceTimersByTimeAsync(400);
+  const row = root.querySelector<HTMLElement>('.food-item')!;
+  row.click();
+  expect(operations.saveExternal).toHaveBeenCalledTimes(1);
+
+  wrapper.remove();
+  document.body.append(root);
+  if (outcome === 'success') pending.resolve({ food: food('Persisted apple') });
+  else pending.reject(new Error('Save failed'));
+  await vi.advanceTimersByTimeAsync(0);
+
+  expect(selected).not.toHaveBeenCalled();
+  expect(alert).not.toHaveBeenCalled();
+  row.click();
+  session.setQuery('later');
+  await vi.advanceTimersByTimeAsync(500);
+  expect(operations.saveExternal).toHaveBeenCalledTimes(1);
+  expect(operations.search).toHaveBeenCalledTimes(1);
+  expect(root.querySelector<HTMLInputElement>('input')!.value).toBe('apple');
+});
