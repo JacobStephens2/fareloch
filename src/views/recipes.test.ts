@@ -517,6 +517,50 @@ it('recovers legacy measure quantity and supports modal and row removal', async 
   expect(document.querySelectorAll('.ingredient-row')).toHaveLength(0);
 });
 
+it('ingredient hydration appends loaded rows without retargeting an open local occurrence edit', async () => {
+  const hydration = deferred<ReturnType<typeof loaded>>();
+  vi.mocked(recipes.get).mockReturnValueOnce(hydration.promise);
+  vi.mocked(foods.search).mockResolvedValue({ foods: [food('Local apple')], external: [] });
+  go('/recipes/1');
+  change('ing-search', 'apple');
+  await vi.advanceTimersByTimeAsync(400);
+  click('#ing-results .food-item');
+  click('#ing-add-btn');
+  click('.ingredient-clickable');
+  hydration.resolve(loaded());
+  await settle();
+  change('ing-qty', '3');
+  click('#ing-add-btn');
+  expect([...document.querySelectorAll('.ingredient-name')].map(el => el.textContent)).toEqual(['Local apple', 'Ingredient 1']);
+  expect([...document.querySelectorAll('.ingredient-unit')].map(el => el.textContent)).toEqual(['3x 100g', 'cup']);
+  submit();
+  expect(recipes.update).toHaveBeenCalledWith(1, expect.objectContaining({ ingredients: [
+    { foodId: 1, servings: 3, qty: 3, unitLabel: '3x 100g' },
+    { foodId: 1, servings: 2, qty: 1, unitLabel: 'cup' },
+  ] }));
+});
+
+it.each(['close', 'remove', 'update'] as const)('%s preserves its ingredient search completion behavior across query and mode changes', async action => {
+  vi.mocked(foods.search).mockResolvedValue({ foods: [food('Search apple')], external: [] });
+  go('/recipes/1');
+  await settle();
+  click('.ingredient-clickable');
+  change('ing-search', 'apple');
+  await vi.advanceTimersByTimeAsync(400);
+  const retainedResult = document.querySelector<HTMLElement>('#ing-results .food-item')!;
+  click('[data-mode="manual"]');
+  click(action === 'close' ? '#ing-modal-close' : action === 'remove' ? '#ing-remove-btn' : '#ing-add-btn');
+  expect(input('ing-search').value).toBe(action === 'update' ? '' : 'apple');
+  expect(document.querySelector('#ing-modal')!.classList.contains('hidden')).toBe(true);
+  expect(document.querySelectorAll('.ingredient-row')).toHaveLength(action === 'remove' ? 0 : 1);
+  click('[data-mode="ingredients"]');
+  if (action === 'update') {
+    retainedResult.click();
+    expect(document.querySelector('#ing-modal')!.classList.contains('hidden')).toBe(true);
+    expect(document.querySelector('#ing-results')!.classList.contains('hidden')).toBe(true);
+  } else expect(input('ing-search').value).toBe('apple');
+});
+
 it.each(actions)('%s keeps the mounted identity even when the caller changes its params', async action => {
   mutableParams.id = action === 'create' ? 'new' : '1';
   go('/captured');
