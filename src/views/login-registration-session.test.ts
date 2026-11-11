@@ -1,8 +1,8 @@
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { getToken, setToken } from '../api';
-import { getGuestUser, hasSampleData, isGuestMode, seedSampleData, setGuestMode } from '../local-db';
+import { getGuestUser, hasSampleData, isGuestMode, localFoods, localMeals, seedSampleData, setGuestMode } from '../local-db';
 import { route, startRouter } from '../router';
-import { onStateChange, state } from '../state';
+import { onStateChange, state, todayStr } from '../state';
 import { deferred } from '../test/food-search-fixtures';
 import { loginView, registerView } from './auth';
 import { mountLoginRegistration } from './login-registration-session';
@@ -49,6 +49,15 @@ function submit(form: Element) {
 function begin(flow: typeof flows[number], root: ParentNode = document.querySelector('#app')!) {
   beginDraft(flow, root);
   return submit(root.querySelector('form')!);
+}
+
+function mountDirectly(flow: typeof flows[number]) {
+  go('/other');
+  document.querySelector('#app')!.innerHTML = (flow.kind === 'login' ? loginView() : registerView()).html;
+  const root = document.querySelector<HTMLElement>('#app .auth-container')!;
+  const dispose = mountLoginRegistration(root, flow.kind);
+  disposeSession = dispose;
+  return { root, dispose };
 }
 
 beforeAll(() => {
@@ -161,14 +170,11 @@ it.each(flows.flatMap(flow => (['success', 'failure', 'rejection'] as const).map
   const pending = deferred<Response>();
   const network = vi.fn(() => pending.promise);
   vi.stubGlobal('fetch', network);
-  go('/other');
-  document.querySelector('#app')!.innerHTML = (flow.kind === 'login' ? loginView() : registerView()).html;
-  const root = document.querySelector<HTMLElement>('#app .auth-container')!;
-  disposeSession = mountLoginRegistration(root, flow.kind);
+  const { root, dispose } = mountDirectly(flow);
   begin(flow, root);
   const before = snapshot(root);
-  disposeSession();
-  disposeSession();
+  dispose();
+  dispose();
   expect(root.isConnected).toBe(true);
   submit(root.querySelector('form')!);
   root.querySelector<HTMLButtonElement>('#guest-btn')?.click();
@@ -191,12 +197,9 @@ it.each(flows.flatMap(flow => (['success', 'failure', 'rejection'] as const).map
 it.each(flows)('explicitly disposed $kind controls cannot begin work while still connected', async flow => {
   const network = vi.fn();
   vi.stubGlobal('fetch', network);
-  go('/other');
-  document.querySelector('#app')!.innerHTML = (flow.kind === 'login' ? loginView() : registerView()).html;
-  const root = document.querySelector<HTMLElement>('#app .auth-container')!;
-  disposeSession = mountLoginRegistration(root, flow.kind);
-  disposeSession();
-  disposeSession();
+  const { root, dispose } = mountDirectly(flow);
+  dispose();
+  dispose();
   begin(flow, root);
   root.querySelector<HTMLButtonElement>('#guest-btn')?.click();
   await settle();
@@ -274,8 +277,8 @@ it('live guest entry seeds sample data, publishes the guest user, and immediatel
   expect(root.isConnected).toBe(true);
   expect(isGuestMode()).toBe(true);
   expect(hasSampleData()).toBe(true);
-  expect(JSON.parse(localStorage.getItem('guest_foods')!)).toHaveLength(6);
-  expect(JSON.parse(localStorage.getItem('guest_meals')!)).toHaveLength(6);
+  expect((await localFoods.custom()).foods).toHaveLength(6);
+  expect((await localMeals.getByDate(todayStr())).meals).toHaveLength(6);
   expect(state.user).toEqual(getGuestUser());
   expect(window.location.hash).toBe('#/');
   const before = snapshot(root);
@@ -441,7 +444,8 @@ it.each(departures)('departed $kind $outcome preserves application effects and l
   begin(flow);
   expect(isGuestMode()).toBe(false);
   expect(hasSampleData()).toBe(false);
-  expect(localStorage.getItem('guest_foods')).toBeNull();
+  expect((await localFoods.custom()).foods).toHaveLength(0);
+  expect((await localMeals.getByDate(todayStr())).meals).toHaveLength(0);
   expect(network).toHaveBeenCalledWith(`/api/auth/${flow.kind}`, expect.objectContaining({
     method: 'POST', body: JSON.stringify(flow.payload), credentials: 'include',
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer existing-token' },
