@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
-import { foods, meals, workoutDays, setToken } from '../api';
+import { foods, meals, recipes, workoutDays, setToken } from '../api';
 import { seedSampleData, setGuestMode } from '../local-db';
 import { route, startRouter } from '../router';
 import { state, todayStr } from '../state';
@@ -59,6 +59,141 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+it('retained old Quick entry Save cannot submit a newer editor values for the old meal', async () => {
+  const { meal: first } = await meals.quickLog({ date: state.selectedDate, mealType: 'breakfast', name: 'First', calories: 100 });
+  await meals.quickLog({ date: state.selectedDate, mealType: 'lunch', name: 'Second', calories: 200 });
+  go('/');
+  await ready(2);
+  tap(document.querySelectorAll<HTMLElement>('.meal-item')[0]);
+  const oldSave = document.querySelector<HTMLButtonElement>('#edit-save-btn')!;
+  tap(document.querySelectorAll<HTMLElement>('.meal-item')[1]);
+  document.querySelector<HTMLInputElement>('#edit-cal')!.value = '999';
+  document.querySelector<HTMLSelectElement>('#edit-meal-type')!.value = 'dinner';
+  document.querySelector('#edit-meal-body')!.appendChild(oldSave);
+  oldSave.click();
+  await Promise.resolve();
+  expect((await meals.getByDate(state.selectedDate)).meals.find(meal => meal.id === first.id))
+    .toMatchObject({ calories: 100, meal_type: 'breakfast' });
+  expect(document.querySelector('#edit-meal-modal')!.classList.contains('hidden')).toBe(false);
+});
+
+async function showTwoEditorMeals(kind: 'food' | 'recipe' | 'quick') {
+  const reference = kind === 'quick' ? {} : kind === 'food'
+    ? { foodId: (await foods.create({ name: 'Apple', calories: 100, carbs_g: 10, protein_g: 5, fat_g: 4 })).food.id }
+    : { recipeId: (await recipes.create({ name: 'Recipe', totalServings: 1, ingredients: [], manualCalories: 100, manualCarbsG: 10, manualProteinG: 5, manualFatG: 4 })).recipe.id };
+  const first = kind === 'quick'
+    ? (await meals.quickLog({ date: state.selectedDate, mealType: 'breakfast', name: 'First', calories: 200 })).meal
+    : (await meals.log({ date: state.selectedDate, mealType: 'breakfast', ...reference, servings: 2 })).meal;
+  const { meal: second } = await meals.quickLog({ date: state.selectedDate, mealType: 'lunch', name: 'Second', calories: 300 });
+  go('/');
+  await ready(2);
+  tap(document.querySelectorAll<HTMLElement>('.meal-item')[0]);
+  return { first, second };
+}
+
+it.each(['food', 'recipe', 'quick'] as const)('accepted HTTP %s Save captures its payload and cannot close a newer same-date editor', async kind => {
+  const { first, second } = await showTwoEditorMeals(kind);
+  setGuestMode(false);
+  setToken('original-owner');
+  const write = deferred<Response>();
+  const requests: { url: string; options?: RequestInit }[] = [];
+  vi.stubGlobal('fetch', vi.fn((url: string, options?: RequestInit) => {
+    requests.push({ url, options });
+    return options?.method === 'PUT' ? write.promise : Promise.resolve(Response.json({ meals: [{ ...first, calories: 444 }, second] }));
+  }));
+  if (kind === 'quick') {
+    document.querySelector<HTMLInputElement>('#edit-cal')!.value = '321.456';
+    document.querySelector<HTMLInputElement>('#edit-protein')!.value = '33.345';
+  } else click('edit-serv-plus');
+  document.querySelector<HTMLSelectElement>('#edit-meal-type')!.value = 'dinner';
+  const oldSave = document.querySelector<HTMLButtonElement>('#edit-save-btn')!;
+  oldSave.click();
+  oldSave.dispatchEvent(new MouseEvent('click'));
+  tap(document.querySelectorAll<HTMLElement>('.meal-item')[1]);
+  document.querySelector<HTMLInputElement>('#edit-cal')!.value = '999';
+  document.querySelector('#edit-meal-body')!.appendChild(oldSave);
+  const before = document.querySelector('#edit-meal-modal')!.outerHTML;
+  expect(requests).toHaveLength(1);
+  expect(requests[0].url).toBe(`/api/meals/${first.id}`);
+  expect(JSON.parse(String(requests[0].options!.body))).toEqual(kind === 'quick'
+    ? { mealType: 'dinner', calories: 321.456, carbsG: 0, proteinG: 33.345, fatG: 0 }
+    : { servings: 3, mealType: 'dinner', calories: 300, carbsG: 30, proteinG: 15, fatG: 12 });
+  expect(new Headers(requests[0].options!.headers).get('Authorization')).toBe('Bearer original-owner');
+  expect(requests[0].options!.credentials).toBe('include');
+  write.resolve(Response.json({ meal: first }));
+  await vi.waitFor(() => expect(document.querySelector('#cal-value')!.textContent).toBe('744'));
+  expect(requests.filter(request => !request.options?.method).map(request => request.url)).toEqual(['/api/meals/2026-04-01']);
+  expect(document.querySelector('#edit-meal-modal')!.outerHTML).toBe(before);
+});
+
+it.each(['save', 'delete'] as const)('accepted guest %s refreshes after same-date Close and leaves a replacement editor intact', async action => {
+  await showTwoEditorMeals('quick');
+  if (action === 'save') document.querySelector<HTMLInputElement>('#edit-cal')!.value = '444';
+  click(action === 'save' ? 'edit-save-btn' : 'edit-delete-btn');
+  // Guest persistence finishes synchronously; completion is still pending.
+  click('edit-modal-close');
+  tap(document.querySelectorAll<HTMLElement>('.meal-item')[1]);
+  const before = document.querySelector('#edit-meal-modal')!.outerHTML;
+  await vi.waitFor(() => expect(document.querySelector('#cal-value')!.textContent).toBe(action === 'save' ? '744' : '300'));
+  expect(document.querySelector('#edit-meal-modal')!.outerHTML).toBe(before);
+  expect((await meals.getByDate('2026-04-01')).meals).toHaveLength(action === 'save' ? 2 : 1);
+});
+
+it.each(['save', 'delete'] as const)('HTTP %s success refreshes only its original live selection; failures leave successor feedback alone', async action => {
+  for (const retirement of ['close', 'replace', 'date', 'return', 'remount', 'parent'] as const) {
+    for (const outcome of ['success', 'failure'] as const) {
+      go('/other');
+      localStorage.clear();
+      setGuestMode(true);
+      state.selectedDate = '2026-04-01';
+      const { first, second } = await showTwoEditorMeals('quick');
+      setGuestMode(false);
+      const write = deferred<Response>();
+      const reads: string[] = [];
+      vi.stubGlobal('fetch', vi.fn((url: string, options?: RequestInit) => {
+        if (options?.method === 'PUT' || options?.method === 'DELETE') return write.promise;
+        if (url.includes('/daily-checks/')) return Promise.resolve(Response.json({ checks: [] }));
+        if (url.includes('/workout-days/')) return Promise.resolve(Response.json({ isWorkoutDay: false }));
+        reads.push(url);
+        return Promise.resolve(Response.json({ meals: [first, second] }));
+      }));
+      click(action === 'save' ? 'edit-save-btn' : 'edit-delete-btn');
+      if (retirement === 'close') click('edit-modal-close');
+      else if (retirement === 'replace') tap(document.querySelectorAll<HTMLElement>('.meal-item')[1]);
+      else if (retirement === 'parent') departAndReconnect(document.querySelector('.dashboard-page')!, 'ancestor');
+      else if (retirement === 'remount') { go('/other'); go('/'); }
+      else { click('date-prev'); if (retirement === 'return') click('date-next'); }
+      if (retirement === 'date' || retirement === 'return' || retirement === 'remount') {
+        await ready(2);
+        tap(document.querySelectorAll<HTMLElement>('.meal-item')[1]);
+      }
+      const modal = document.querySelector('#edit-meal-modal')!;
+      const before = modal.outerHTML;
+      const beforeReads = reads.length;
+      if (outcome === 'success') write.resolve(Response.json({ meal: first, success: true }));
+      else write.resolve(Response.json({ error: 'offline' }, { status: 500 }));
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(reads.length - beforeReads, `${retirement}, ${outcome}`).toBe(outcome === 'success' && (retirement === 'close' || retirement === 'replace') ? 1 : 0);
+      expect(modal.outerHTML, `${retirement}, ${outcome}`).toBe(before);
+    }
+  }
+});
+
+it('removing an editor-only control retires that editor and keeps Dashboard usable', async () => {
+  await showTwoEditorMeals('food');
+  const oldSave = document.querySelector<HTMLButtonElement>('#edit-save-btn')!;
+  const oldPlus = document.querySelector<HTMLButtonElement>('#edit-serv-plus')!;
+  document.querySelector('#edit-servings')!.remove();
+  oldSave.click();
+  oldPlus.click();
+  tap(document.querySelectorAll<HTMLElement>('.meal-item')[1]);
+  document.querySelector<HTMLInputElement>('#edit-cal')!.value = '555';
+  click('edit-save-btn');
+  await vi.waitFor(() => expect(document.querySelector('#cal-value')!.textContent).toBe('755'));
+  click('date-prev');
+  expect(state.selectedDate).toBe('2026-03-31');
 });
 
 it.each(['root', 'fixed replacement'])('Dashboard permanently retires on same-turn %s before router cleanup', async departure => {
