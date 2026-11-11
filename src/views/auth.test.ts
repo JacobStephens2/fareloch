@@ -13,7 +13,7 @@ it('shows a readable login error when the server returns the app HTML', async ()
     headers: { 'Content-Type': 'text/html' },
   })));
   const view = loginView();
-  document.body.innerHTML = view.html;
+  document.body.innerHTML = `<div id="app">${view.html}</div>`;
   view.init();
   document.querySelector<HTMLInputElement>('#email')!.value = 'test@example.invalid';
   document.querySelector<HTMLInputElement>('#password')!.value = 'test-only-password';
