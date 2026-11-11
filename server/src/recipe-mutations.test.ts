@@ -2,6 +2,7 @@
 import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
 import { getDb, initDb } from './db.js';
 import { createRecipe, updateRecipe, copyRecipe } from './recipe-mutations.js';
+import { rejectSecondIngredient, storedRecipes } from '../test/recipe-mutation-fixture.js';
 
 beforeAll(() => { initDb(':memory:'); });
 afterAll(() => getDb().close());
@@ -33,21 +34,6 @@ function ingredients(recipeId: number | bigint) {
   return getDb().prepare('SELECT * FROM recipe_ingredients WHERE recipe_id = ? ORDER BY id').all(recipeId);
 }
 
-function storedRecipes() {
-  return {
-    recipes: getDb().prepare('SELECT * FROM recipes ORDER BY id').all(),
-    ingredients: getDb().prepare('SELECT * FROM recipe_ingredients ORDER BY id').all(),
-  };
-}
-
-function rejectSecondIngredient() {
-  getDb().exec(`
-    CREATE TEMP TRIGGER reject_second_ingredient BEFORE INSERT ON recipe_ingredients
-    WHEN (SELECT count(*) FROM recipe_ingredients WHERE recipe_id = NEW.recipe_id) = 1
-    BEGIN SELECT RAISE(ABORT, 'second ingredient rejected'); END;
-  `);
-}
-
 it('creates metadata and ingredient occurrences with truthy and nullish defaults', () => {
   const result = createRecipe(getDb(), 1, {
     name: 'Breakfast', totalServings: 0, servingUnit: '',
@@ -71,13 +57,13 @@ it('creates metadata and ingredient occurrences with truthy and nullish defaults
 });
 
 it('rolls back all creation writes when the second ingredient insert fails', () => {
-  const before = storedRecipes();
-  rejectSecondIngredient();
+  const before = storedRecipes(getDb());
+  rejectSecondIngredient(getDb());
   expect(() => createRecipe(getDb(), 1, {
     name: 'Rejected', ingredients: [{ foodId: 10 }, { foodId: 10 }],
   })).toThrow('second ingredient rejected');
   expect(getDb().inTransaction).toBe(false);
-  expect(storedRecipes()).toEqual(before);
+  expect(storedRecipes(getDb())).toEqual(before);
 });
 
 it('updates metadata and replaces ingredient occurrences with create/update defaults', () => {
@@ -129,14 +115,14 @@ it('clears an empty ingredient array and explicitly null Manual macros', () => {
 });
 
 it('rolls back metadata and original ingredient identities when the second replacement insert fails', () => {
-  const before = storedRecipes();
-  rejectSecondIngredient();
+  const before = storedRecipes(getDb());
+  rejectSecondIngredient(getDb());
   expect(() => updateRecipe(getDb(), 1, 20, {
     name: 'Rejected', totalServings: 9, servingUnit: 'cup', manualCalories: 99,
     ingredients: [{ foodId: 10 }, { foodId: 10 }],
   })).toThrow('second ingredient rejected');
   expect(getDb().inTransaction).toBe(false);
-  expect(storedRecipes()).toEqual(before);
+  expect(storedRecipes(getDb())).toEqual(before);
 });
 
 it.each([
@@ -190,11 +176,11 @@ it('duplicates stored metadata and occurrences exactly with fresh identities and
 });
 
 it('rolls back all duplication writes when the second copied ingredient insert fails', () => {
-  const before = storedRecipes();
-  rejectSecondIngredient();
+  const before = storedRecipes(getDb());
+  rejectSecondIngredient(getDb());
   expect(() => copyRecipe(getDb(), 1, 20)).toThrow('second ingredient rejected');
   expect(getDb().inTransaction).toBe(false);
-  expect(storedRecipes()).toEqual(before);
+  expect(storedRecipes(getDb())).toEqual(before);
 });
 
 it.each([
@@ -202,8 +188,8 @@ it.each([
   { userId: 1, id: '999999' },
   { userId: 1, id: '20suffix' },
 ])('treats missing and other-user identities as not found without writes: %j', ({ userId, id }) => {
-  const before = storedRecipes();
+  const before = storedRecipes(getDb());
   expect(updateRecipe(getDb(), userId, id, { name: 'Forbidden', ingredients: [] })).toEqual({ saved: false });
   expect(copyRecipe(getDb(), userId, id)).toBeNull();
-  expect(storedRecipes()).toEqual(before);
+  expect(storedRecipes(getDb())).toEqual(before);
 });
