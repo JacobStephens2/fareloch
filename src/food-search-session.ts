@@ -222,20 +222,84 @@ export function mountFoodSearch(root: HTMLElement, { kind, foods, onSelect, onQu
   return controls;
 }
 
-// Explicit Recent/My Foods tabs use the same saved-row presentation as search.
-export function renderSavedFoodList(container: HTMLElement, foods: Food[], onSelect: (food: Food) => void) {
-  const list = document.createElement('div');
-  list.className = 'food-list';
-  for (const food of foods) {
-    const row = resultRow(food, 'meal', false);
-    row.addEventListener('click', () => {
-      if (row.isConnected && container.contains(row)) onSelect(food);
-    });
-    list.append(row);
+// Each connected, exclusively owned explicit-tab host gets one read and lifetime.
+export function mountSavedFoodList(host: HTMLElement, options: {
+  read: () => Promise<{ foods: Food[] }>;
+  onSelect: (food: Food) => void;
+} & ({ kind: 'recent' } | { kind: 'custom'; onCreate: () => void })): () => void {
+  let disposed = false;
+  const events = new AbortController();
+  const ancestors = new Set<Node>();
+  for (let node: Node | null = host; node; node = node.parentNode) ancestors.add(node);
+  const departed = (records: MutationRecord[]) => records.some(record =>
+    Array.from(record.removedNodes).some(node => ancestors.has(node)));
+  const departure = new MutationObserver(records => {
+    if (departed(records)) dispose();
+  });
+  departure.observe(host.ownerDocument, { childList: true, subtree: true });
+
+  function dispose() {
+    if (disposed) return;
+    disposed = true;
+    events.abort();
+    departure.disconnect();
   }
-  const existing = container.querySelector('.food-list');
-  if (existing) existing.replaceWith(list);
-  else container.append(list);
+
+  function isLive() {
+    if (disposed) return false;
+    // Reads and actions can run before the removal observer's microtask.
+    if (!host.isConnected || departed(departure.takeRecords())) {
+      dispose();
+      return false;
+    }
+    return true;
+  }
+
+  async function load() {
+    if (!isLive()) return;
+    host.innerHTML = '<div class="loading-spinner">Loading...</div>';
+    try {
+      const { foods } = await options.read();
+      if (!isLive()) return;
+      host.replaceChildren();
+      if (options.kind === 'custom') {
+        const create = document.createElement('button');
+        create.id = 'create-food-btn';
+        create.className = 'btn btn-outline btn-block';
+        create.style.marginBottom = '12px';
+        create.textContent = '+ Create Custom Food';
+        create.addEventListener('click', () => {
+          if (isLive() && host.contains(create)) options.onCreate();
+        }, { signal: events.signal });
+        host.append(create);
+      }
+      if (!foods.length) {
+        const empty = document.createElement('p');
+        empty.className = 'text-muted';
+        empty.textContent = options.kind === 'recent' ? 'No recent foods' : 'No custom foods yet';
+        host.append(empty);
+        return;
+      }
+      const list = document.createElement('div');
+      list.className = 'food-list';
+      for (const food of foods) {
+        const row = resultRow(food, 'meal', false);
+        row.addEventListener('click', () => {
+          if (isLive() && host.contains(row)) options.onSelect(food);
+        }, { signal: events.signal });
+        list.append(row);
+      }
+      host.append(list);
+    } catch {
+      if (!isLive()) return;
+      host.innerHTML = options.kind === 'recent'
+        ? '<p class="form-error">Failed to load recent foods</p>'
+        : '<p class="form-error">Failed to load foods</p>';
+    }
+  }
+
+  void load();
+  return dispose;
 }
 
 function textHeading(text: string) {

@@ -7,7 +7,7 @@ import { deferred, food, result } from '../test/food-search-fixtures';
 import type { FoodSearchResult } from '../food-search-session';
 import type { ExternalFood, Recipe } from '../types';
 
-const scanner = vi.hoisted(() => ({ code: '0012345678905' }));
+const scanner = vi.hoisted((): { code: string | null } => ({ code: '0012345678905' }));
 
 vi.mock('../api', () => ({
   foods: { search: vi.fn(), recent: vi.fn(), custom: vi.fn(), saveExternal: vi.fn(), barcode: vi.fn() },
@@ -18,7 +18,7 @@ vi.mock('../api', () => ({
 vi.mock('html5-qrcode', () => ({
   Html5Qrcode: class {
     start(_camera: unknown, _config: unknown, onScan: (code: string) => void) {
-      onScan(scanner.code);
+      if (scanner.code !== null) onScan(scanner.code);
       return Promise.resolve();
     }
     stop() {
@@ -331,7 +331,7 @@ it.each(['/other', '/missing'])('pending searches and tab loads cannot publish a
   expect(tabContent.innerHTML).toBe(previous);
 });
 
-it('Recent and My Foods tabs do not show a source label outside the food search session', async () => {
+it('Recent success replaces loading and explicit tabs omit search source labels', async () => {
   const recent = food('Recent apple');
   recent.source = 'sample';
   const custom = food('Custom apple');
@@ -345,6 +345,7 @@ it('Recent and My Foods tabs do not show a source label outside the food search 
   await vi.advanceTimersByTimeAsync(0);
   expect(document.querySelector('#tab-content .food-source')).toBeNull();
   expect(document.querySelector('#tab-content')!.textContent).toContain('Recent apple');
+  expect(document.querySelector('#tab-content .loading-spinner')).toBeNull();
   expect(document.querySelector('#tab-content')!.textContent).not.toContain('sample');
   click('[data-tab="custom"]');
   await vi.advanceTimersByTimeAsync(0);
@@ -352,6 +353,145 @@ it('Recent and My Foods tabs do not show a source label outside the food search 
   expect(document.querySelector('#tab-content')!.textContent).toContain('Custom apple');
   expect(document.querySelector('#tab-content')!.textContent).not.toContain('manual');
 });
+
+it.each(['recent', 'custom'] as const)('%s retained saved row stays inert after reinsertion into Quick Add', async tab => {
+  go('/log');
+  await vi.advanceTimersByTimeAsync(0);
+  vi.mocked(foods[tab]).mockResolvedValue({ foods: [food('Retained apple')] });
+  click(`[data-tab="${tab}"]`);
+  await vi.advanceTimersByTimeAsync(0);
+  const row = document.querySelector<HTMLElement>('#tab-content .food-item')!;
+  row.click();
+  expect(document.querySelector('#modal-food-name')!.textContent).toBe('Retained apple');
+  click('#modal-close');
+  click('[data-tab="quick"]');
+  document.querySelector('#tab-content')!.append(row);
+  row.click();
+  expect(document.querySelector('#food-detail-modal')!.classList.contains('hidden')).toBe(true);
+  expect(document.querySelector('#quick-form')).not.toBeNull();
+});
+
+const savedBarcodeCases = (['recent', 'custom'] as const).flatMap(tab =>
+  (['success', 'empty', 'failure'] as const).flatMap(outcome =>
+    (['pending', 'found', 'missing'] as const).map(barcode => ({ tab, outcome, barcode }))));
+
+it.each(savedBarcodeCases)('$tab late $outcome leaves $barcode barcode feedback intact', async ({ tab, outcome, barcode }) => {
+  go('/log');
+  await vi.advanceTimersByTimeAsync(0);
+  const pending = deferred<{ foods: ReturnType<typeof food>[] }>();
+  const lookup = deferred<{ food: ReturnType<typeof food> }>();
+  vi.mocked(foods[tab]).mockReturnValue(pending.promise);
+  vi.mocked(foods.barcode).mockReturnValue(lookup.promise);
+  click(`[data-tab="${tab}"]`);
+  const oldHost = document.querySelector('#tab-content')!.firstElementChild!;
+  click('#scan-btn');
+  await vi.advanceTimersByTimeAsync(0);
+  expect(document.querySelector('#tab-content')!.textContent).toBe('Looking up barcode...');
+  if (barcode === 'found') lookup.resolve({ food: food('Scanned apple') });
+  if (barcode === 'missing') lookup.reject(new Error('No barcode match'));
+  await vi.advanceTimersByTimeAsync(0);
+  const content = document.querySelector('#tab-content')!;
+  const before = content.innerHTML;
+  const departed = oldHost.innerHTML;
+  if (outcome === 'failure') pending.reject(new Error('Obsolete saved list'));
+  else pending.resolve({ foods: outcome === 'empty' ? [] : [food('Obsolete apple')] });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(content.innerHTML).toBe(before);
+  expect(oldHost.innerHTML).toBe(departed);
+  if (barcode === 'pending') {
+    lookup.resolve({ food: food('Scanned apple') });
+    await vi.advanceTimersByTimeAsync(0);
+  }
+});
+
+it.each(['recent', 'custom'] as const)('%s reselection gets a fresh host and ignores reversed reads', async tab => {
+  go('/log');
+  await vi.advanceTimersByTimeAsync(0);
+  const old = deferred<{ foods: ReturnType<typeof food>[] }>();
+  const current = deferred<{ foods: ReturnType<typeof food>[] }>();
+  vi.mocked(foods[tab]).mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise);
+  click(`[data-tab="${tab}"]`);
+  const oldHost = document.querySelector('#tab-content')!.firstElementChild!;
+  click(`[data-tab="${tab}"]`);
+  const newHost = document.querySelector('#tab-content')!.firstElementChild!;
+  expect(newHost).not.toBe(oldHost);
+  current.resolve({ foods: [food('Current apple')] });
+  await vi.advanceTimersByTimeAsync(0);
+  old.resolve({ foods: [] });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(newHost.textContent).toContain('Current apple');
+  expect(newHost.querySelector('.loading-spinner')).toBeNull();
+  expect(oldHost.textContent).toBe('Loading...');
+});
+
+it.each(['recent', 'custom'] as const)('%s survives modal closing and scanner opening/closing without a barcode', async tab => {
+  scanner.code = null;
+  vi.mocked(foods[tab]).mockResolvedValue({ foods: [food('Surviving apple')] });
+  go('/log');
+  click(`[data-tab="${tab}"]`);
+  await vi.advanceTimersByTimeAsync(0);
+  const row = document.querySelector<HTMLElement>('#tab-content .food-item')!;
+  row.click();
+  click('#modal-close');
+  click('#scan-btn');
+  await vi.advanceTimersByTimeAsync(0);
+  click('#scanner-close');
+  await vi.advanceTimersByTimeAsync(0);
+  row.click();
+  expect(document.querySelector('#food-detail-modal')!.classList.contains('hidden')).toBe(false);
+  expect(document.querySelector('#modal-food-name')!.textContent).toBe('Surviving apple');
+  expect(foods.barcode).not.toHaveBeenCalled();
+});
+
+it('My Foods Cancel mounts a fresh list but an obsolete Cancel and Create stay inert', async () => {
+  vi.mocked(foods.custom).mockResolvedValue({ foods: [] });
+  go('/log');
+  click('[data-tab="custom"]');
+  await vi.advanceTimersByTimeAsync(0);
+  const content = document.querySelector('#tab-content')!;
+  const oldHost = content.firstElementChild!;
+  const create = document.querySelector<HTMLElement>('#create-food-btn')!;
+  create.click();
+  const cancel = document.querySelector<HTMLElement>('#cancel-create')!;
+  const pending = deferred<{ foods: ReturnType<typeof food>[] }>();
+  vi.mocked(foods.custom).mockReturnValueOnce(pending.promise);
+  cancel.click();
+  const fresh = content.firstElementChild!;
+  expect(fresh).not.toBe(oldHost);
+  expect(fresh.textContent).toBe('Loading...');
+  pending.resolve({ foods: [] });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(fresh.textContent).toBe('+ Create Custom FoodNo custom foods yet');
+  click('[data-tab="quick"]');
+  content.append(oldHost, cancel);
+  const before = content.innerHTML;
+  const reads = vi.mocked(foods.custom).mock.calls.length;
+  create.click();
+  cancel.click();
+  expect(content.innerHTML).toBe(before);
+  expect(foods.custom).toHaveBeenCalledTimes(reads);
+});
+
+it.each((['recent', 'custom'] as const).flatMap(tab =>
+  (['success', 'empty', 'failure'] as const).map(outcome => ({ tab, outcome }))))(
+  '$tab late $outcome leaves the current Custom Food form intact', async ({ tab, outcome }) => {
+    go('/log');
+    await vi.advanceTimersByTimeAsync(0);
+    const pending = deferred<{ foods: ReturnType<typeof food>[] }>();
+    vi.mocked(foods[tab]).mockReturnValueOnce(pending.promise);
+    click(`[data-tab="${tab}"]`);
+    vi.mocked(foods.custom).mockResolvedValue({ foods: [] });
+    click('[data-tab="custom"]');
+    await vi.advanceTimersByTimeAsync(0);
+    click('#create-food-btn');
+    const content = document.querySelector('#tab-content')!;
+    const before = content.innerHTML;
+    if (outcome === 'failure') pending.reject(new Error('Retired read'));
+    else pending.resolve({ foods: outcome === 'empty' ? [] : [food('Old apple')] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(content.innerHTML).toBe(before);
+  },
+);
 
 it.each(['/log', '/recipe'])('%s shows search result name, brand, serving unit, and source label as text', async path => {
   const tag = (field: string) => `${field}<img alt="${field}">`;

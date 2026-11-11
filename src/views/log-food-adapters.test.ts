@@ -30,6 +30,42 @@ afterEach(() => {
 
 const settle = () => vi.advanceTimersByTimeAsync(0);
 
+it.each(['recent', 'custom'] as const)('guest explicit %s reads saved Foods and selects without network access', async tab => {
+  const network = vi.fn(() => { throw new Error('Guest saved reads must stay local'); });
+  vi.stubGlobal('fetch', network);
+  const { food: saved } = await foods.create(food('Guest saved apple'));
+  go('/log');
+  click(`[data-tab="${tab}"]`);
+  await settle();
+  expect(document.querySelector('#tab-content .food-item-name')!.textContent).toBe('Guest saved apple');
+  expect(document.querySelector('#tab-content .loading-spinner, #tab-content .food-source')).toBeNull();
+  click('#tab-content .food-item');
+  expect(document.querySelector('#modal-food-name')!.textContent).toBe(saved.name);
+  expect(network).not.toHaveBeenCalled();
+});
+
+it.each(['recent', 'custom'] as const)('signed-in explicit %s uses its existing authenticated read adapter', async tab => {
+  setGuestMode(false);
+  setToken('saved-read-token');
+  const network = vi.fn(async (url: string) => {
+    if (url === '/api/foods/recent') return Response.json({ foods: [food('HTTP recent')] });
+    if (url === '/api/foods/custom') return Response.json({ foods: [food('HTTP custom')] });
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  vi.stubGlobal('fetch', network);
+  go('/log');
+  await settle();
+  network.mockClear();
+  click(`[data-tab="${tab}"]`);
+  await settle();
+  expect(network).toHaveBeenCalledExactlyOnceWith(`/api/foods/${tab}`, expect.objectContaining({
+    credentials: 'include', headers: expect.objectContaining({ Authorization: 'Bearer saved-read-token' }),
+  }));
+  expect(document.querySelector('#tab-content .food-item-name')!.textContent).toBe(`HTTP ${tab}`);
+  click('#tab-content .food-item');
+  expect(document.querySelector('#modal-food-name')!.textContent).toBe(`HTTP ${tab}`);
+});
+
 it.each(['food', 'recipe', 'quick'] as const)('guest %s logging preserves captured values when its write settles after departure', async kind => {
   const network = vi.fn();
   vi.stubGlobal('fetch', network);
