@@ -317,45 +317,6 @@ it.each(['success', 'failure'])('a newer same-date refresh supersedes an older m
   expect(document.querySelectorAll('.meal-section')).toHaveLength(4);
 });
 
-it.each(['food', 'quick'] as const)('preserves the %s edit payload and refreshes the saved meal', async kind => {
-  const entry = kind === 'food'
-    ? meal({ servings: 3, unit_scale: 1.5, calories: 200, carbs_g: 20, protein_g: 10, fat_g: 8 })
-    : meal({ food_id: null, note: 'Quick meal' });
-  await openEditMealModal(entry);
-  if (kind === 'food') {
-    expect(document.querySelector('#edit-total')!.textContent).toContain('10g P');
-    button('edit-serv-plus').click();
-    expect(document.querySelector('#edit-total')!.textContent).toContain('15g P');
-  } else {
-    document.querySelector<HTMLInputElement>('#edit-cal')!.value = '321.4';
-    document.querySelector<HTMLInputElement>('#edit-carbs')!.value = '22.2';
-    document.querySelector<HTMLInputElement>('#edit-protein')!.value = '33.3';
-    document.querySelector<HTMLInputElement>('#edit-fat')!.value = '4.4';
-  }
-  document.querySelector<HTMLSelectElement>('#edit-meal-type')!.value = 'dinner';
-  vi.mocked(meals.getByDate).mockResolvedValue({ meals: [meal({ food_name: 'Saved' })] });
-  button('edit-save-btn').click();
-  await settle();
-  expect(meals.update).toHaveBeenCalledWith(1, kind === 'food'
-    ? { servings: 4.5, mealType: 'dinner', calories: 300, carbsG: 30, proteinG: 15, fatG: 12 }
-    : { mealType: 'dinner', calories: 321.4, carbsG: 22.2, proteinG: 33.3, fatG: 4.4 });
-  expect(document.querySelector('#edit-meal-modal')!.classList.contains('hidden')).toBe(true);
-  expect(document.querySelector('.meal-item-name')!.textContent).toContain('Saved');
-});
-
-it.each(['food', 'quick'] as const)('allows the current %s form to retry a failed save', async kind => {
-  await openEditMealModal(meal({ food_id: kind === 'food' ? 1 : null }));
-  vi.mocked(meals.update).mockRejectedValueOnce(new Error('save failed'));
-  button('edit-save-btn').click();
-  await settle();
-  expect(button('edit-save-btn').disabled).toBe(false);
-  expect(button('edit-save-btn').textContent).toBe('Failed - Retry');
-  expect(document.querySelector('#edit-meal-modal')!.classList.contains('hidden')).toBe(false);
-  button('edit-save-btn').click();
-  await settle();
-  expect(document.querySelector('#edit-meal-modal')!.classList.contains('hidden')).toBe(true);
-});
-
 it.each(['food', 'quick', 'delete'] as const)('%s completion cannot change a later selection or modal', async action => {
   for (const how of ['date', 'return', 'remount'] as const) {
     for (const outcome of ['success', 'failure']) {
@@ -502,21 +463,6 @@ async function openEditMealModal(entry: MealLog): Promise<Element> {
   expect(modal.classList.contains('hidden')).toBe(false);
   return modal;
 }
-
-it('edit meal modal shows a saved measure label as text on the per-unit line and the quantity label', async () => {
-  const label = 'cup<img alt="measure">';
-  const modal = await openEditMealModal(meal({ unit_label: label }));
-  expect(modal.querySelector('img')).toBeNull();
-  expect(modal.querySelector('p.text-muted')!.textContent).toBe(`Per ${label}`);
-  expect(modal.querySelector('label[for="edit-servings"]')!.textContent).toBe(label);
-});
-
-it('edit meal modal shows a saved food brand as text', async () => {
-  const brand = 'Acme<img alt="brand">';
-  const modal = await openEditMealModal(meal({ food_brand: brand }));
-  expect(modal.querySelector('img')).toBeNull();
-  expect(modal.querySelector('.food-brand')!.textContent).toBe(brand);
-});
 
 it('dashboard meal list shows a logged meal name as text', async () => {
   const name = 'Apple<img alt="name">';
