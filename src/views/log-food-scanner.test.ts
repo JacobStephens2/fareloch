@@ -5,6 +5,9 @@ import { scannerAdapter } from '../test/barcode-scanner-fixtures';
 
 let adapter: ReturnType<typeof scannerAdapter>;
 const barcode = vi.fn();
+const quickLog = vi.fn();
+const create = vi.fn();
+const custom = vi.fn();
 let listeners: ReturnType<typeof listenForRoutes>;
 function listenForRoutes() { return vi.spyOn(window, 'addEventListener'); }
 
@@ -15,9 +18,12 @@ beforeEach(async () => {
   vi.useFakeTimers();
   adapter = scannerAdapter();
   barcode.mockReset().mockResolvedValue({ food: food('Scanned apple') });
+  quickLog.mockReset();
+  create.mockReset();
+  custom.mockReset().mockResolvedValue({ foods: [] });
   vi.doMock('../api', () => ({
-    foods: { recent: vi.fn().mockResolvedValue({ foods: [] }), barcode },
-    meals: {}, recipes: {},
+    foods: { recent: vi.fn().mockResolvedValue({ foods: [] }), barcode, custom, create },
+    meals: { quickLog }, recipes: {},
   }));
   vi.doMock('html5-qrcode', async () => ({ Html5Qrcode: await adapter.loadScanner() }));
   document.body.innerHTML = '<div id="app"></div>';
@@ -99,6 +105,37 @@ it.each(['success', 'failure'])('barcode lookup %s belongs to the live Log Food 
     ? 'Found: Scanned <apple>' : 'No product found for barcode captured-<code>');
   expect(document.querySelector('#tab-content apple, #tab-content code')).toBeNull();
   if (outcome === 'success') expect(document.querySelector('#modal-food-name')!.textContent).toBe('Scanned <apple>');
+});
+
+it.each(['quick', 'custom'] as const)('barcode feedback retires retained %s controls while its Log Food parent stays live', async kind => {
+  click(`[data-tab="${kind}"]`);
+  if (kind === 'custom') { await settle(); click('#create-food-btn'); }
+  const form = document.querySelector<HTMLFormElement>('form')!;
+  const prefix = kind === 'quick' ? 'quick' : 'cf';
+  const carbs = form.querySelector<HTMLInputElement>(`#${prefix}-carbs`)!;
+  const calories = form.querySelector<HTMLInputElement>(`#${prefix}-cal`)!;
+  carbs.value = '10';
+  carbs.dispatchEvent(new Event('input'));
+  click('#scan-btn');
+  await settle();
+  adapter.instances[0].decode('captured-code');
+  await settle();
+  const content = document.querySelector('#tab-content')!;
+  expect(content.textContent).toBe('Found: Scanned apple');
+  content.append(form);
+  const before = content.innerHTML;
+  carbs.value = '20';
+  carbs.dispatchEvent(new Event('input'));
+  form.dispatchEvent(new Event('submit', { cancelable: true }));
+  form.querySelector<HTMLButtonElement>('#cancel-create')?.click();
+  expect(calories.value).toBe('40');
+  expect(content.innerHTML).toBe(before);
+  expect(quickLog).not.toHaveBeenCalled();
+  expect(create).not.toHaveBeenCalled();
+  expect(custom).toHaveBeenCalledTimes(kind === 'custom' ? 1 : 0);
+  expect(document.querySelector('#modal-food-name')!.textContent).toBe('Scanned apple');
+  click('[data-tab="quick"]');
+  expect(document.querySelector('#quick-form')).not.toBeNull();
 });
 
 it.each(['success', 'failure'])('barcode lookup %s cannot publish after departure or remount', async outcome => {

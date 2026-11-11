@@ -1,8 +1,8 @@
-import { foods as foodsApi, meals as mealsApi, recipes as recipesApi } from '../api';
+import { foods as foodsApi, recipes as recipesApi } from '../api';
 import { navigate } from '../router';
 import { mountFoodSearch, mountSavedFoodList } from '../food-search-session';
 import { mountMealAddSession } from './meal-add-session';
-import { mountMacrosEntry } from './macros-entry';
+import { mountLogFoodFormSession } from './log-food-form-session';
 import { mountRecipeList } from './recipe-list-session';
 import { mountBarcodeScanner } from './barcode-scanner-session';
 import { createMountedLifetime } from '../mounted-lifetime';
@@ -10,7 +10,7 @@ import type { Food, Recipe, MealType } from '../types';
 
 export function mountLogFood(root: HTMLElement, date: string, mealType: MealType): () => void {
   let disposeMealAdd: (() => void) | undefined;
-  let macrosEntry: ReturnType<typeof mountMacrosEntry> | undefined;
+  let disposeForm: (() => void) | undefined;
   let disposeRecipeList: (() => void) | undefined;
   let disposeSavedFoodList: (() => void) | undefined;
   let disposeSearch: (() => void) | undefined;
@@ -26,7 +26,7 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
       ++tabRevision;
       disposeRecipeList?.();
       disposeSavedFoodList?.();
-      macrosEntry?.dispose();
+      disposeForm?.();
       disposeMealAdd?.();
       disposeSearch?.();
       disposeScanner?.();
@@ -52,6 +52,7 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
       if (!isLive()) return;
       disposeRecipeList?.();
       disposeSavedFoodList?.();
+      disposeForm?.();
       ++tabRevision;
       activeTab = 'search';
       root.querySelector('.tab.active')?.classList.remove('active');
@@ -73,6 +74,7 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
       const current = ++tabRevision;
       disposeRecipeList?.();
       disposeSavedFoodList?.();
+      disposeForm?.();
       session.setActive(activeTab === 'search');
       if (activeTab === 'recipes') {
         const host = document.createElement('div');
@@ -83,19 +85,25 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
         });
       } else if (activeTab === 'recent' || activeTab === 'custom') {
         showSavedFoodList(activeTab, current);
-      } else if (activeTab === 'quick') showQuickAddForm(content);
+      } else if (activeTab === 'quick') showForm({ kind: 'quick', date, mealType, isParentLive: isLive, onSaved: () => {
+        if (isLive()) navigate('#/');
+      } });
     });
   });
 
   function showSavedFoodList(kind: 'recent' | 'custom', current: number) {
     if (!isLive()) return;
     disposeSavedFoodList?.();
+    disposeForm?.();
     const host = document.createElement('div');
     content.replaceChildren(host);
     disposeSavedFoodList = mountSavedFoodList(host, kind === 'recent'
       ? { kind, read: foodsApi.recent, onSelect: showAddModal, isParentLive: isLive }
-      : { kind, read: foodsApi.custom, onSelect: showAddModal, isParentLive: isLive, onCreate: () => showCreateFoodForm(() => {
-        if (isLive() && current === tabRevision) showSavedFoodList(kind, current);
+      : { kind, read: foodsApi.custom, onSelect: showAddModal, isParentLive: isLive, onCreate: () => showForm({
+        kind: 'custom', mealType, isParentLive: isLive, onCreated: showAddModal,
+        onCancel: () => {
+          if (isLive() && current === tabRevision) showSavedFoodList(kind, current);
+        },
       }) });
   }
 
@@ -140,109 +148,10 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
     });
   }
 
-  function showQuickAddForm(container: HTMLElement) {
+  function showForm(options: Parameters<typeof mountLogFoodFormSession>[1]) {
     if (!isLive()) return;
-    container.innerHTML = `
-      <form id="quick-form" class="quick-form">
-        <div class="form-group">
-          <label for="quick-name">Description (optional)</label>
-          <input type="text" id="quick-name" placeholder="e.g. Handful of almonds" />
-        </div>
-        <div id="quick-macros"></div>
-        <button type="submit" class="btn btn-primary btn-block">Add to ${capitalize(mealType)}</button>
-      </form>
-    `;
-
-    macrosEntry?.dispose();
-    const entry = mountMacrosEntry(find('quick-macros'), 'quick', undefined, isLive);
-    macrosEntry = entry;
-
-    on(find('quick-form'), 'submit', async (e) => {
-      e.preventDefault();
-      const values = entry.read();
-      if (!values) return;
-      const btn = (e.target as HTMLFormElement).querySelector('button')!;
-      btn.disabled = true;
-
-      try {
-        await mealsApi.quickLog({
-          date,
-          mealType,
-          name: (find('quick-name') as HTMLInputElement).value || undefined,
-          ...values,
-        });
-        if (!isLive()) return;
-        navigate('#/');
-      } catch {
-        if (!isLive()) return;
-        btn.disabled = false;
-        btn.textContent = 'Failed - Retry';
-      }
-    });
-  }
-
-  function showCreateFoodForm(onCancel: () => void) {
-    if (!isLive()) return;
-    const content = find('tab-content')!;
-    content.innerHTML = `
-      <form id="create-food-form">
-        <div class="form-group">
-          <label for="cf-name">Name *</label>
-          <input type="text" id="cf-name" required />
-        </div>
-        <div class="form-group">
-          <label for="cf-brand">Brand</label>
-          <input type="text" id="cf-brand" />
-        </div>
-        <div class="form-row">
-          <div class="form-group">
-            <label for="cf-serving">Serving Size</label>
-            <input type="number" id="cf-serving" value="1" min="0" step="0.1" />
-          </div>
-          <div class="form-group">
-            <label for="cf-unit">Unit</label>
-            <input type="text" id="cf-unit" value="serving" />
-          </div>
-        </div>
-        <div id="cf-macros"></div>
-        <button type="submit" class="btn btn-primary btn-block">Create & Add to ${capitalize(mealType)}</button>
-        <button type="button" id="cancel-create" class="btn btn-outline btn-block">Cancel</button>
-      </form>
-    `;
-
-    macrosEntry?.dispose();
-    const entry = mountMacrosEntry(find('cf-macros'), 'custom', undefined, isLive);
-    macrosEntry = entry;
-
-    on(find('cancel-create'), 'click', onCancel);
-
-    on(find('create-food-form'), 'submit', async (e) => {
-      e.preventDefault();
-      const values = entry.read();
-      if (!values) return;
-      const btn = (e.target as HTMLFormElement).querySelector('button[type=submit]') as HTMLButtonElement;
-      btn.disabled = true;
-
-      try {
-        const { food } = await foodsApi.create({
-          name: (find('cf-name') as HTMLInputElement).value,
-          brand: (find('cf-brand') as HTMLInputElement).value || null,
-          serving_size: parseFloat((find('cf-serving') as HTMLInputElement).value) || 1,
-          serving_unit: (find('cf-unit') as HTMLInputElement).value || 'serving',
-          calories: values.calories,
-          carbs_g: values.carbsG,
-          protein_g: values.proteinG,
-          fat_g: values.fatG,
-        });
-
-        if (!isLive()) return;
-        showAddModal(food);
-      } catch {
-        if (!isLive()) return;
-        btn.disabled = false;
-        btn.textContent = 'Failed - Retry';
-      }
-    });
+    disposeForm?.();
+    disposeForm = mountLogFoodFormSession(content, options);
   }
 
   function closeModal() {
@@ -252,8 +161,4 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
 
   session.setActive(true);
   return dispose;
-}
-
-function capitalize(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
 }
