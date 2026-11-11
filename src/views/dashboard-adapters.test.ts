@@ -6,6 +6,7 @@ import { state, todayStr } from '../state';
 import { dashboardView } from './dashboard';
 import { deferred } from '../test/food-search-fixtures';
 import { departAndReconnect } from '../test/mounted-lifetime-fixtures';
+import { swipe, settleMealPersistence as settle } from '../test/meal-list-fixtures';
 
 async function showFoodMeal() {
   const { food } = await foods.create({ name: 'Apple', serving_size: 100, serving_unit: 'g', calories: 100, protein_g: 5 });
@@ -19,6 +20,139 @@ function tap(item: HTMLElement) {
   item.dispatchEvent(new MouseEvent('mousedown', { clientX: 100, clientY: 10 }));
   document.dispatchEvent(new MouseEvent('mouseup', { clientX: 100, clientY: 10 }));
 }
+
+it.each(['guest', 'HTTP'] as const)('%s accepted swipe survives same-date replacement before completion or after effects are queued', async adapter => {
+  for (const timing of ['pending', 'queued'] as const) {
+    go('/other');
+    localStorage.clear();
+    setGuestMode(true);
+    const { first, second } = await showTwoEditorMeals('quick');
+    click('edit-modal-close');
+    const item = document.querySelector<HTMLElement>('.meal-item')!;
+    const wrapper = item.parentElement!;
+    const container = document.querySelector('#meals-container')!;
+    const pending = deferred<Response>();
+    const reads: string[] = [];
+    if (adapter === 'HTTP') {
+      setGuestMode(false);
+      setToken('original-list-owner');
+      vi.stubGlobal('fetch', vi.fn((url: string, options?: RequestInit) => {
+        if (options?.method === 'DELETE') {
+          expect(url).toBe(`/api/meals/${first.id}`);
+          expect(new Headers(options.headers).get('Authorization')).toBe('Bearer original-list-owner');
+          expect(options.credentials).toBe('include');
+          return pending.promise;
+        }
+        if (url.includes('/workout-days/')) return Promise.resolve(Response.json({ isWorkoutDay: true }));
+        reads.push(url);
+        return Promise.resolve(Response.json({ meals: [second] }));
+      }));
+    }
+    vi.useFakeTimers();
+    swipe(item);
+    if (timing === 'queued') {
+      pending.resolve(Response.json({ success: true }));
+      await settle();
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+    }
+    // A same-date render disposes the old list; reattaching it cannot revive it.
+    document.querySelector<HTMLInputElement>('#workout-toggle')!.click();
+    container.append(wrapper);
+    const oldBefore = wrapper.outerHTML;
+    const currentSecond = [...container.querySelectorAll<HTMLElement>('.meal-item')].find(row => row.dataset.id === String(second.id))!;
+    tap(currentSecond);
+    document.querySelector<HTMLInputElement>('#edit-cal')!.value = '999';
+    const modal = document.querySelector('#edit-meal-modal')!;
+    const editorBefore = modal.outerHTML;
+    const read = vi.spyOn(meals, 'getByDate');
+    pending.resolve(Response.json({ success: true }));
+    await settle();
+    await vi.advanceTimersByTimeAsync(299);
+    expect(read).not.toHaveBeenCalled();
+    expect(wrapper.outerHTML).toBe(oldBefore);
+    swipe(item);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(read).toHaveBeenCalledExactlyOnceWith('2026-04-01');
+    expect(document.querySelector('#cal-value')!.textContent).toBe('300');
+    expect(modal.outerHTML).toBe(editorBefore);
+    expect(wrapper.outerHTML).toBe(oldBefore);
+    if (adapter === 'guest') expect((await meals.getByDate('2026-04-01')).meals.map(entry => entry.id)).toEqual([second.id]);
+    else expect(reads).toEqual(['/api/meals/2026-04-01']);
+    read.mockRestore();
+    go('/other');
+    vi.useRealTimers();
+  }
+});
+
+it.each(['pending', 'queued'] as const)('HTTP swipe %s work is suppressed by date change, return, Dashboard replacement or retirement', async timing => {
+  for (const retirement of ['date', 'return', 'remount', 'parent'] as const) {
+    for (const outcome of ['success', 'failure'] as const) {
+      go('/other');
+      localStorage.clear();
+      setGuestMode(true);
+      state.selectedDate = '2026-04-01';
+      const item = await showFoodMeal();
+      setGuestMode(false);
+      const pending = deferred<Response>();
+      const requests: string[] = [];
+      vi.stubGlobal('fetch', vi.fn((url: string, options?: RequestInit) => {
+        requests.push(url);
+        if (options?.method === 'DELETE') return pending.promise;
+        return Promise.resolve(Response.json(url.includes('/workout-days/') ? { isWorkoutDay: false }
+          : url.includes('/daily-checks/') ? { checks: [] } : { meals: [] }));
+      }));
+      vi.useFakeTimers();
+      swipe(item);
+      if (timing === 'queued') {
+        pending.resolve(Response.json(outcome === 'success' ? { success: true } : { error: 'Failed' }, { status: outcome === 'success' ? 200 : 500 }));
+        await settle();
+      }
+      const root = document.querySelector<HTMLElement>('.dashboard-page')!;
+      if (retirement === 'parent') departAndReconnect(root, 'ancestor');
+      else if (retirement === 'remount') { go('/other'); go('/'); }
+      else { click('date-prev'); if (retirement === 'return') click('date-next'); }
+      await settle();
+      const before = root.outerHTML;
+      const readsBefore = requests.length;
+      pending.resolve(Response.json(outcome === 'success' ? { success: true } : { error: 'Failed' }, { status: outcome === 'success' ? 200 : 500 }));
+      await settle();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(requests.length, `${retirement}, ${outcome}`).toBe(readsBefore);
+      expect(root.outerHTML, `${retirement}, ${outcome}`).toBe(before);
+      expect(vi.getTimerCount()).toBe(0);
+      go('/other');
+      vi.useRealTimers();
+    }
+  }
+});
+
+it.each(['date', 'return', 'remount', 'parent'] as const)('accepted guest swipe persists before %s and its completion cannot refresh or change the retired view', async retirement => {
+  const item = await showFoodMeal();
+  const root = document.querySelector<HTMLElement>('.dashboard-page')!;
+  const originalDate = state.selectedDate;
+  swipe(item);
+  if (retirement === 'parent') departAndReconnect(root, 'ancestor');
+  else if (retirement === 'remount') { go('/other'); go('/'); }
+  else { click('date-prev'); if (retirement === 'return') click('date-next'); }
+  const oldRow = item.outerHTML;
+  await settle();
+  const read = vi.spyOn(meals, 'getByDate');
+  vi.useFakeTimers();
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(read).not.toHaveBeenCalled();
+  expect(item.outerHTML).toBe(oldRow);
+  expect((await meals.getByDate(originalDate)).meals).toEqual([]);
+});
+
+it('row-only departure retires the list while Dashboard date controls remain usable', async () => {
+  const item = await showFoodMeal();
+  const root = document.querySelector<HTMLElement>('.dashboard-page')!;
+  departAndReconnect(root, '.meal-item');
+  tap(item);
+  expect(document.querySelector('#edit-meal-modal')!.classList.contains('hidden')).toBe(true);
+  click('date-prev');
+  expect(state.selectedDate).toBe('2026-03-31');
+});
 
 async function openFoodMeal() {
   tap(await showFoodMeal());
@@ -229,18 +363,6 @@ it.each(['edit-serv-minus', 'edit-serv-plus', 'edit-modal-close', 'date-label'])
   },
 );
 
-it.each(['movement', 'cancellation'])('Dashboard rejects gesture %s after same-turn ancestor departure', async action => {
-  const item = await showFoodMeal();
-  item.dispatchEvent(new MouseEvent('mousedown', { clientX: 200, clientY: 10 }));
-  const root = document.querySelector<HTMLElement>('#app .dashboard-page')!;
-  departAndReconnect(root, 'ancestor');
-  const before = item.getAttribute('style');
-  if (action === 'movement') document.dispatchEvent(new MouseEvent('mousemove', { clientX: 50, clientY: 10 }));
-  else item.dispatchEvent(new Event('touchcancel'));
-  document.dispatchEvent(new MouseEvent('mouseup'));
-  expect(item.getAttribute('style')).toBe(before);
-  expect((await meals.getByDate('2026-04-01')).meals).toHaveLength(1);
-});
 
 it('guest copy persists before ancestor retirement and its completion precedes observer delivery', async () => {
   await meals.quickLog({ date: '2026-03-31', mealType: 'lunch', name: 'Copy source', calories: 300 });
