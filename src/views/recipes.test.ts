@@ -261,6 +261,27 @@ it.each(['/other', '/missing'])('retained static, ingredient, search and modal c
   oldRoot.remove();
 });
 
+it('gram edits after a calorie override immediately refresh Per-serving nutrition and Save', async () => {
+  go('/recipes/new');
+  click('[data-mode="manual"]');
+  change('recipe-name', 'Two-serving recipe');
+  change('recipe-servings', '2');
+  change('manual-carbs', '10');
+  change('manual-cal', '200');
+  change('manual-carbs', '20');
+  expect([...document.querySelectorAll('#recipe-totals strong')].map(el => el.textContent)).toEqual(['100', '10g', '0g', '0g']);
+  change('manual-protein', '12');
+  expect([...document.querySelectorAll('#recipe-totals strong')].map(el => el.textContent)).toEqual(['100', '10g', '6g', '0g']);
+  change('manual-fat', '8');
+  expect([...document.querySelectorAll('#recipe-totals strong')].map(el => el.textContent)).toEqual(['100', '10g', '6g', '4g']);
+  submit();
+  expect(recipes.create).toHaveBeenLastCalledWith({
+    name: 'Two-serving recipe', totalServings: 2, servingUnit: 'serving', ingredients: [],
+    manualCalories: 200, manualCarbsG: 20, manualProteinG: 12, manualFatG: 8,
+  });
+  await settle();
+});
+
 it('hydrates zero-valued Manual macros and preserves calorie override, modes and Per-serving nutrition', async () => {
   const zero = loaded();
   zero.recipe.manual_calories = 0;
@@ -285,6 +306,7 @@ it('hydrates zero-valued Manual macros and preserves calorie override, modes and
   change('manual-cal', '0');
   change('manual-carbs', '20');
   expect(input('manual-cal').value).toBe('0');
+  expect([...document.querySelectorAll('#recipe-totals strong')].map(el => el.textContent)).toEqual(['0', '6.7g', '1.7g', '1.3g']);
   click('[data-mode="ingredients"]');
   click('[data-mode="manual"]');
   submit();
@@ -292,6 +314,81 @@ it('hydrates zero-valued Manual macros and preserves calorie override, modes and
     totalServings: 3, manualCalories: 0, manualCarbsG: 20, manualProteinG: 5, manualFatG: 4,
   }));
   await settle();
+});
+
+it.each(['0', ''])('gram edits after calorie override %j preserve zero or ingredient fallback in preview and Save', async override => {
+  go('/recipes/1');
+  await settle();
+  click('[data-mode="manual"]');
+  change('manual-cal', override);
+  const expected = override === '' ? ['100', '10g', '5g', '4g'] : ['0', '0g', '0g', '0g'];
+  for (const [index, field] of ['carbs', 'protein', 'fat'].entries()) {
+    change(`manual-${field}`, '20');
+    if (override === '0') expected[index + 1] = '10g';
+    expect([...document.querySelectorAll('#recipe-totals strong')].map(el => el.textContent)).toEqual(expected);
+    expect(input('manual-cal').value).toBe(override);
+  }
+  submit();
+  expect(recipes.update).toHaveBeenLastCalledWith(1, expect.objectContaining({
+    manualCalories: override === '' ? null : 0, manualCarbsG: 20, manualProteinG: 20, manualFatG: 20,
+  }));
+  await settle();
+});
+
+it('Ingredients mode ignores retained Manual macros while returning to Manual preserves its override', async () => {
+  vi.mocked(recipes.update).mockRejectedValueOnce(new Error('retry'));
+  go('/recipes/1');
+  await settle();
+  click('[data-mode="manual"]');
+  change('manual-carbs', '20');
+  change('manual-cal', '200');
+  click('[data-mode="ingredients"]');
+  submit();
+  expect(recipes.update).toHaveBeenLastCalledWith(1, expect.objectContaining({
+    manualCalories: null, manualCarbsG: null, manualProteinG: null, manualFatG: null,
+  }));
+  await settle();
+  click('[data-mode="manual"]');
+  change('manual-protein', '12');
+  expect([...document.querySelectorAll('#recipe-totals strong')].map(el => el.textContent)).toEqual(['100', '10g', '6g', '0g']);
+});
+
+it.each([false, true])('delayed Manual macros hydration preserves an early calorie override of %s', async overridden => {
+  const hydration = deferred<ReturnType<typeof loaded>>();
+  vi.mocked(recipes.get).mockReturnValueOnce(hydration.promise);
+  go('/recipes/1');
+  click('[data-mode="manual"]');
+  change('manual-carbs', '99');
+  if (overridden) change('manual-cal', '200');
+  const result = loaded();
+  Object.assign(result.recipe, { manual_calories: 0, manual_carbs_g: 10 });
+  hydration.resolve(result);
+  await settle();
+  expect(input('manual-cal').value).toBe('0');
+  expect(input('manual-carbs').value).toBe('10');
+  change('manual-carbs', '20');
+  expect([...document.querySelectorAll('#recipe-totals strong')].map(el => el.textContent)).toEqual([overridden ? '0' : '40', '10g', '0g', '0g']);
+});
+
+it.each(['create', 'update'] as const)('%s captures Manual macros and completes across live mode and modal changes', async action => {
+  const pending = deferred<{ recipe: Recipe; success: boolean }>();
+  vi.mocked(recipes[action]).mockReturnValueOnce(pending.promise);
+  go(action === 'create' ? '/recipes/new' : '/recipes/1');
+  await settle();
+  click('[data-mode="manual"]');
+  change('manual-carbs', '20');
+  change('manual-cal', '200');
+  submit();
+  const payload = expect.objectContaining({ manualCalories: 200, manualCarbsG: 20, manualProteinG: null, manualFatG: null });
+  expect(recipes[action]).toHaveBeenLastCalledWith(...(action === 'create' ? [payload] : [1, payload]));
+  change('manual-cal', '999');
+  click('[data-mode="ingredients"]');
+  change('ing-search', 'apple');
+  await vi.advanceTimersByTimeAsync(400);
+  click('#ing-modal-close');
+  pending.resolve({ recipe: recipe(3), success: true });
+  await settle();
+  expect(window.location.hash).toBe('#/recipes');
 });
 
 it('recovers legacy measure quantity and supports modal and row removal', async () => {

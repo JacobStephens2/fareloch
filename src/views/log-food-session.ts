@@ -2,8 +2,9 @@ import { foods as foodsApi, meals as mealsApi, recipes as recipesApi } from '../
 import { navigate } from '../router';
 import { mountFoodSearch, renderSavedFoodList } from '../food-search-session';
 import { mountFoodQuantitySelection } from './food-quantity-selection';
+import { mountMacrosEntry } from './macros-entry';
 import type { Food, Recipe, MealType } from '../types';
-import { scaleMacros, roundMacros, caloriesFromMacros } from '../../server/src/nutrition';
+import { scaleMacros, roundMacros } from '../../server/src/nutrition';
 
 // Only physical camera ownership is shared between mounted Log Food sessions.
 let cameraGate: Promise<void> = Promise.resolve();
@@ -20,6 +21,7 @@ type CameraAttempt = {
 export function mountLogFood(root: HTMLElement, date: string, mealType: MealType): () => void {
   let disposed = false;
   let quantitySelection: ReturnType<typeof mountFoodQuantitySelection> | undefined;
+  let macrosEntry: ReturnType<typeof mountMacrosEntry> | undefined;
   const events = new AbortController();
   const isLive = () => !disposed && root.isConnected;
   const find = <T extends HTMLElement = HTMLElement>(id: string) => root.querySelector<T>(`#${id}`)!;
@@ -431,45 +433,19 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
           <label for="quick-name">Description (optional)</label>
           <input type="text" id="quick-name" placeholder="e.g. Handful of almonds" />
         </div>
-        <div class="form-row">
-          <div class="form-group">
-            <label for="quick-carbs">Carbs (g)</label>
-            <input type="number" id="quick-carbs" min="0" step="0.1" />
-          </div>
-          <div class="form-group">
-            <label for="quick-protein">Protein (g)</label>
-            <input type="number" id="quick-protein" min="0" step="0.1" />
-          </div>
-          <div class="form-group">
-            <label for="quick-fat">Fat (g)</label>
-            <input type="number" id="quick-fat" min="0" step="0.1" />
-          </div>
-        </div>
-        <div class="form-group">
-          <label for="quick-cal">Calories <span class="form-hint" id="quick-cal-hint">(auto-calculated)</span></label>
-          <input type="number" id="quick-cal" min="0" step="1" />
-        </div>
+        <div id="quick-macros"></div>
         <button type="submit" class="btn btn-primary btn-block">Add to ${capitalize(mealType)}</button>
       </form>
     `;
 
-    // Auto-calc calories from macros
-    const qCalInput = find('quick-cal') as HTMLInputElement;
-    let qCalManual = false;
-    on(qCalInput, 'input', () => { qCalManual = true; });
-    const autoCalcQ = () => {
-      if (qCalManual) return;
-      const c = parseFloat((find('quick-carbs') as HTMLInputElement).value) || 0;
-      const p = parseFloat((find('quick-protein') as HTMLInputElement).value) || 0;
-      const f = parseFloat((find('quick-fat') as HTMLInputElement).value) || 0;
-      qCalInput.value = String(caloriesFromMacros(c, p, f));
-    };
-    ['quick-carbs', 'quick-protein', 'quick-fat'].forEach(id =>
-      on(find(id)!, 'input', autoCalcQ)
-    );
+    macrosEntry?.dispose();
+    const entry = mountMacrosEntry(find('quick-macros'), 'quick');
+    macrosEntry = entry;
 
     on(find('quick-form'), 'submit', async (e) => {
       e.preventDefault();
+      const values = entry.read();
+      if (!values) return;
       const btn = (e.target as HTMLFormElement).querySelector('button')!;
       btn.disabled = true;
 
@@ -478,10 +454,7 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
           date,
           mealType,
           name: (find('quick-name') as HTMLInputElement).value || undefined,
-          calories: parseFloat((find('quick-cal') as HTMLInputElement).value) || 0,
-          carbsG: parseFloat((find('quick-carbs') as HTMLInputElement).value) || 0,
-          proteinG: parseFloat((find('quick-protein') as HTMLInputElement).value) || 0,
-          fatG: parseFloat((find('quick-fat') as HTMLInputElement).value) || 0,
+          ...values,
         });
         if (!isLive()) return;
         navigate('#/');
@@ -515,48 +488,22 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
             <input type="text" id="cf-unit" value="serving" />
           </div>
         </div>
-        <div class="form-row">
-          <div class="form-group">
-            <label for="cf-carbs">Carbs (g)</label>
-            <input type="number" id="cf-carbs" min="0" step="0.1" />
-          </div>
-          <div class="form-group">
-            <label for="cf-protein">Protein (g)</label>
-            <input type="number" id="cf-protein" min="0" step="0.1" />
-          </div>
-          <div class="form-group">
-            <label for="cf-fat">Fat (g)</label>
-            <input type="number" id="cf-fat" min="0" step="0.1" />
-          </div>
-        </div>
-        <div class="form-group">
-          <label for="cf-cal">Calories <span class="form-hint" id="cf-cal-hint">(auto-calculated)</span></label>
-          <input type="number" id="cf-cal" min="0" step="1" />
-        </div>
+        <div id="cf-macros"></div>
         <button type="submit" class="btn btn-primary btn-block">Create & Add to ${capitalize(mealType)}</button>
         <button type="button" id="cancel-create" class="btn btn-outline btn-block">Cancel</button>
       </form>
     `;
 
-    // Auto-calc calories from macros
-    const cfCalInput = find('cf-cal') as HTMLInputElement;
-    let cfCalManual = false;
-    on(cfCalInput, 'input', () => { cfCalManual = true; });
-    const autoCalcCf = () => {
-      if (cfCalManual) return;
-      const c = parseFloat((find('cf-carbs') as HTMLInputElement).value) || 0;
-      const p = parseFloat((find('cf-protein') as HTMLInputElement).value) || 0;
-      const f = parseFloat((find('cf-fat') as HTMLInputElement).value) || 0;
-      cfCalInput.value = String(caloriesFromMacros(c, p, f));
-    };
-    ['cf-carbs', 'cf-protein', 'cf-fat'].forEach(id =>
-      on(find(id)!, 'input', autoCalcCf)
-    );
+    macrosEntry?.dispose();
+    const entry = mountMacrosEntry(find('cf-macros'), 'custom');
+    macrosEntry = entry;
 
     on(find('cancel-create'), 'click', onCancel);
 
     on(find('create-food-form'), 'submit', async (e) => {
       e.preventDefault();
+      const values = entry.read();
+      if (!values) return;
       const btn = (e.target as HTMLFormElement).querySelector('button[type=submit]') as HTMLButtonElement;
       btn.disabled = true;
 
@@ -566,10 +513,10 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
           brand: (find('cf-brand') as HTMLInputElement).value || null,
           serving_size: parseFloat((find('cf-serving') as HTMLInputElement).value) || 1,
           serving_unit: (find('cf-unit') as HTMLInputElement).value || 'serving',
-          calories: parseFloat((find('cf-cal') as HTMLInputElement).value) || 0,
-          carbs_g: parseFloat((find('cf-carbs') as HTMLInputElement).value) || 0,
-          protein_g: parseFloat((find('cf-protein') as HTMLInputElement).value) || 0,
-          fat_g: parseFloat((find('cf-fat') as HTMLInputElement).value) || 0,
+          calories: values.calories,
+          carbs_g: values.carbsG,
+          protein_g: values.proteinG,
+          fat_g: values.fatG,
         });
 
         if (!isLive()) return;
@@ -591,6 +538,7 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
   return () => {
     if (disposed) return;
     disposed = true;
+    macrosEntry?.dispose();
     quantitySelection?.dispose();
     ++tabRevision;
     session.dispose();

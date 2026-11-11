@@ -102,24 +102,7 @@ export function recipeEditView(params: Record<string, string>) {
 
           <div id="manual-section" class="hidden">
             <p class="text-muted" style="margin-bottom:12px">Enter the macros for the entire recipe (all servings combined).</p>
-            <div class="form-row">
-              <div class="form-group">
-                <label for="manual-carbs">Carbs (g)</label>
-                <input type="number" id="manual-carbs" min="0" step="0.1" />
-              </div>
-              <div class="form-group">
-                <label for="manual-protein">Protein (g)</label>
-                <input type="number" id="manual-protein" min="0" step="0.1" />
-              </div>
-              <div class="form-group">
-                <label for="manual-fat">Fat (g)</label>
-                <input type="number" id="manual-fat" min="0" step="0.1" />
-              </div>
-            </div>
-            <div class="form-group">
-              <label for="manual-cal">Calories <span class="form-hint" id="manual-cal-hint">(auto-calculated)</span></label>
-              <input type="number" id="manual-cal" min="0" step="1" />
-            </div>
+            <div id="manual-macros"></div>
           </div>
 
           <div id="recipe-totals" class="recipe-totals"></div>
