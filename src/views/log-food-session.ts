@@ -1,16 +1,15 @@
 import { foods as foodsApi, meals as mealsApi, recipes as recipesApi } from '../api';
 import { navigate } from '../router';
 import { mountFoodSearch, mountSavedFoodList } from '../food-search-session';
-import { mountFoodQuantitySelection } from './food-quantity-selection';
+import { mountMealAddSession } from './meal-add-session';
 import { mountMacrosEntry } from './macros-entry';
 import { mountRecipeList } from './recipe-list-session';
 import { mountBarcodeScanner } from './barcode-scanner-session';
 import { createMountedLifetime } from '../mounted-lifetime';
 import type { Food, Recipe, MealType } from '../types';
-import { scaleMacros, roundMacros } from '../../server/src/nutrition';
 
 export function mountLogFood(root: HTMLElement, date: string, mealType: MealType): () => void {
-  let quantitySelection: ReturnType<typeof mountFoodQuantitySelection> | undefined;
+  let disposeMealAdd: (() => void) | undefined;
   let macrosEntry: ReturnType<typeof mountMacrosEntry> | undefined;
   let disposeRecipeList: (() => void) | undefined;
   let disposeSavedFoodList: (() => void) | undefined;
@@ -28,7 +27,7 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
       disposeRecipeList?.();
       disposeSavedFoodList?.();
       macrosEntry?.dispose();
-      quantitySelection?.dispose();
+      disposeMealAdd?.();
       disposeSearch?.();
       disposeScanner?.();
     },
@@ -123,115 +122,22 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
   }
 
   function showAddModal(food: Food) {
-    if (!isLive()) return;
-    const modal = find('food-detail-modal')!;
-    find('modal-food-name')!.textContent = food.name;
-    quantitySelection?.dispose();
-    const body = find('modal-body')!;
-    body.innerHTML = `
-      <div id="food-quantity"></div>
-      <button id="add-food-btn" class="btn btn-primary btn-block">Add to ${capitalize(mealType)}</button>
-    `;
-    const selection = mountFoodQuantitySelection(find('food-quantity'), food, { kind: 'meal', isParentLive: isLive });
-    quantitySelection = selection;
-    on(find('add-food-btn'), 'click', async () => {
-      const amount = selection.read();
-      if (!amount) return;
-      const btn = find('add-food-btn') as HTMLButtonElement;
-      btn.disabled = true;
-      btn.textContent = 'Adding...';
-      try {
-        await mealsApi.log({ date, mealType, foodId: food.id, servings: amount.servings, unitLabel: amount.unitLabel, unitScale: amount.unitScale });
-        if (!isLive()) return;
-        closeModal();
-        navigate('#/');
-      } catch {
-        if (!isLive()) return;
-        btn.disabled = false;
-        btn.textContent = 'Failed - Retry';
-      }
-    });
-    modal.classList.remove('hidden');
+    showMealAdd({ kind: 'food', food });
   }
 
   function showRecipeAddModal(recipe: Recipe) {
+    showMealAdd({ kind: 'recipe', recipe });
+  }
+
+  function showMealAdd(selection: Parameters<typeof mountMealAddSession>[1]) {
     if (!isLive()) return;
-    quantitySelection?.dispose();
-    const modal = find('food-detail-modal')!;
-    find('modal-food-name')!.textContent = recipe.name;
-
-    const perServing = recipe.perServing;
-    const body = find('modal-body')!;
-    body.innerHTML = `
-      <div class="modal-macros">
-        <div class="modal-macro"><strong>${perServing.calories}</strong> kcal</div>
-        <div class="modal-macro"><strong>${perServing.carbsG}g</strong> carbs</div>
-        <div class="modal-macro"><strong>${perServing.proteinG}g</strong> protein</div>
-        <div class="modal-macro"><strong>${perServing.fatG}g</strong> fat</div>
-      </div>
-      <p class="text-muted">Per ${recipe.serving_unit || 'serving'} (${recipe.total_servings} total)</p>
-      <div class="form-group">
-        <label for="servings-input">Servings</label>
-        <div class="servings-control">
-          <button id="serv-minus" class="btn-icon">-</button>
-          <input type="number" id="servings-input" value="1" min="1" step="1" />
-          <button id="serv-plus" class="btn-icon">+</button>
-        </div>
-      </div>
-      <div class="modal-total" id="modal-total">
-        <span>${perServing.calories} kcal</span>
-        <span>${perServing.carbsG}g C</span>
-        <span>${perServing.proteinG}g P</span>
-        <span>${perServing.fatG}g F</span>
-      </div>
-      <button id="add-food-btn" class="btn btn-primary btn-block">Add to ${capitalize(mealType)}</button>
-    `;
-
-    const servingsInput = find('servings-input') as HTMLInputElement;
-    const totalElement = find('modal-total');
-    const updateTotal = () => {
-      const s = parseFloat(servingsInput.value) || 1;
-      // Multiplies the display-rounded perServing the API sends (see #2)
-      const total = roundMacros(scaleMacros(perServing, s), 'display');
-      totalElement.innerHTML = `
-        <span>${total.calories} kcal</span>
-        <span>${total.carbsG}g C</span>
-        <span>${total.proteinG}g P</span>
-        <span>${total.fatG}g F</span>
-      `;
-    };
-
-    on(servingsInput, 'input', updateTotal);
-    on(find('serv-minus'), 'click', () => {
-      const v = parseFloat(servingsInput.value) || 1;
-      servingsInput.value = String(Math.max(1, v - 1));
-      updateTotal();
+    disposeMealAdd?.();
+    disposeMealAdd = mountMealAddSession(find('food-detail-modal'), selection, date, mealType, isLive, () => {
+      if (!isLive()) return;
+      disposeMealAdd?.();
+      closeModal();
+      navigate('#/');
     });
-    on(find('serv-plus'), 'click', () => {
-      const v = parseFloat(servingsInput.value) || 1;
-      servingsInput.value = String(v + 1);
-      updateTotal();
-    });
-
-    on(find('add-food-btn'), 'click', async () => {
-      const servings = parseFloat(servingsInput.value) || 1;
-      const btn = find('add-food-btn') as HTMLButtonElement;
-      btn.disabled = true;
-      btn.textContent = 'Adding...';
-
-      try {
-        await mealsApi.log({ date, mealType, recipeId: recipe.id, servings });
-        if (!isLive()) return;
-        closeModal();
-        navigate('#/');
-      } catch {
-        if (!isLive()) return;
-        btn.disabled = false;
-        btn.textContent = 'Failed - Retry';
-      }
-    });
-
-    modal.classList.remove('hidden');
   }
 
   function showQuickAddForm(container: HTMLElement) {
@@ -344,7 +250,6 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
     find('food-detail-modal')?.classList.add('hidden');
   }
 
-  on(find('modal-close'), 'click', closeModal);
   session.setActive(true);
   return dispose;
 }

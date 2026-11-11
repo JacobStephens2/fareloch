@@ -30,6 +30,28 @@ afterEach(() => {
 
 const settle = () => vi.advanceTimersByTimeAsync(0);
 
+it('replacing Recipe A with B permanently retires A Add without touching B or persisting A', async () => {
+  for (const name of ['Recipe A', 'Recipe B']) await recipes.create({
+    name, totalServings: 1, ingredients: [], manualCalories: 100,
+  });
+  go('/log?date=2026-04-01&meal=dinner');
+  click('[data-tab="recipes"]');
+  await settle();
+  const rows = [...document.querySelectorAll<HTMLElement>('.food-item')];
+  rows.find(row => row.textContent!.includes('Recipe A'))!.click();
+  change('servings-input', '3');
+  const oldAdd = document.querySelector<HTMLButtonElement>('#add-food-btn')!;
+  rows.find(row => row.textContent!.includes('Recipe B'))!.click();
+  const modal = document.querySelector('#food-detail-modal')!;
+  const currentAdd = modal.querySelector<HTMLButtonElement>('#add-food-btn')!;
+  modal.append(oldAdd);
+  const before = modal.outerHTML;
+  oldAdd.click();
+  expect(modal.outerHTML).toBe(before);
+  expect(currentAdd.disabled).toBe(false);
+  expect((await meals.getByDate('2026-04-01')).meals).toHaveLength(0);
+});
+
 it.each(['recent', 'custom'] as const)('guest explicit %s reads saved Foods and selects without network access', async tab => {
   const network = vi.fn(() => { throw new Error('Guest saved reads must stay local'); });
   vi.stubGlobal('fetch', network);
