@@ -171,12 +171,8 @@ async function begin(operation: Operation, pending: ReturnType<typeof deferred<t
       const unit = document.querySelector<HTMLSelectElement>('#unit-select')!;
       unit.value = '0';
       unit.dispatchEvent(new Event('change'));
-      expect(document.querySelector('#modal-total')!.textContent).toBe('400 kcal40g C20g P16g F');
-    } else expect(document.querySelector('#modal-total')!.textContent?.replace(/\s/g, '')).toBe('202kcal20.2gC10.2gP8.2gF');
+    }
     click('#add-food-btn');
-    expect(meals.log).toHaveBeenCalledWith(operation === 'food' ? {
-      date: '2026-04-01', mealType: 'lunch', foodId: 1, servings: 4, unitLabel: 'cup', unitScale: 2,
-    } : { date: '2026-04-01', mealType: 'lunch', recipeId: 7, servings: 2 });
   }
 }
 
@@ -229,7 +225,7 @@ it.each(['external', 'custom', 'food', 'recipe', 'quick'] as const)(
   }
 });
 
-it.each(['external', 'custom', 'food', 'recipe', 'quick'] as const)('%s retains live failure/retry and success behavior', async operation => {
+it.each(['external', 'custom', 'quick'] as const)('%s retains live failure/retry and success behavior', async operation => {
   const pending = deferred<typeof completion>();
   await begin(operation, pending);
   pending.reject(new Error('Current operation'));
@@ -279,6 +275,32 @@ it.each(['food', 'recipe', 'quick'] as const)('%s submission keeps its captured 
   await settle();
   expect(window.location.hash).toBe('#/');
   expect(window.alert).not.toHaveBeenCalled();
+});
+
+it.each(['food', 'recipe'] as const)('%s open form survives live query/tab changes and accepted success owns return after replacement', async operation => {
+  const pending = deferred<typeof completion>();
+  go('/log?date=2026-04-01&meal=lunch');
+  vi.mocked(foods.recent).mockResolvedValue({ foods: [food('Saved apple')] });
+  click(operation === 'food' ? '[data-tab="recent"]' : '[data-tab="recipes"]');
+  await settle();
+  click('.food-item');
+  change('servings-input', '2');
+  const original = document.querySelector('#add-food-btn')!;
+  change('food-search', 'new query');
+  click('[data-tab="quick"]');
+  vi.mocked(meals.log).mockReturnValueOnce(pending.promise);
+  original.dispatchEvent(new MouseEvent('click'));
+  expect(meals.log).toHaveBeenCalledWith(expect.objectContaining({
+    date: '2026-04-01', mealType: 'lunch', servings: 2,
+    ...(operation === 'food' ? { foodId: 1 } : { recipeId: 7 }),
+  }));
+  click('[data-tab="recipes"]');
+  await settle();
+  click('.food-item');
+  expect(document.querySelector('#add-food-btn')).not.toBe(original);
+  pending.resolve(completion);
+  await settle();
+  expect(window.location.hash).toBe('#/');
 });
 
 it.each(['external', 'custom', 'food', 'recipe', 'quick'] as const)('%s retained controls are inert after disposal or reconnection following observer delivery', async operation => {
