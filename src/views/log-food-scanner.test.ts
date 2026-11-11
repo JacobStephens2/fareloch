@@ -146,3 +146,35 @@ it('retained scanner controls and callbacks cannot restart capture or lookup aft
   expect(document.querySelector('#app')!.innerHTML).toBe(current);
   expect(window.location.hash).toBe('#/other');
 });
+
+it('fixed parent departure prevents a retained scanner opening before observer delivery', async () => {
+  const back = document.querySelector('#back-btn')!;
+  back.replaceWith(back.cloneNode(true));
+  const root = document.querySelector('.log-page')!;
+  const before = root.outerHTML;
+  click('#scan-btn');
+  expect(root.outerHTML).toBe(before);
+  await settle();
+  expect(adapter.instances).toHaveLength(0);
+  expect(barcode).not.toHaveBeenCalled();
+});
+
+it.each(['success', 'failure'])('barcode lookup %s is silent after raw parent departure before observer delivery', async outcome => {
+  const lookup = deferred<{ food: ReturnType<typeof food> }>();
+  barcode.mockReturnValueOnce(lookup.promise);
+  click('#scan-btn');
+  await settle();
+  adapter.instances[0].decode('retired-code');
+  await settle();
+  expect(adapter.instances[0].track.readyState).toBe('ended');
+  if (outcome === 'success') lookup.resolve({ food: food('Retired apple') });
+  else lookup.reject(new Error('Retired lookup'));
+  const root = document.querySelector('.log-page')!;
+  const app = root.parentElement!;
+  app.remove();
+  document.body.append(app);
+  const before = root.outerHTML;
+  await settle();
+  expect(root.outerHTML).toBe(before);
+  expect(barcode).toHaveBeenCalledTimes(1);
+});

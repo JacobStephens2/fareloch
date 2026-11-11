@@ -29,9 +29,11 @@ type CameraAttempt = {
 export function mountBarcodeScanner(root: HTMLElement, {
   onBarcode,
   loadScanner = loadInstalledScanner,
+  isParentLive = () => true,
 }: {
   onBarcode: (code: string) => void;
   loadScanner?: () => Promise<ScannerConstructor>;
+  isParentLive?: () => boolean;
 }): () => void {
   const find = (id: string) => root.querySelector<HTMLElement>(`#${id}`)!;
   const scannerContainer = find('scanner-container');
@@ -50,7 +52,7 @@ export function mountBarcodeScanner(root: HTMLElement, {
     ownedNodes: [scanButton, scannerContainer, scannerSlot, closeButton],
     cleanup: cancelCurrentAttempt,
   });
-  const isLive = lifetime.isLive;
+  const isLive = () => lifetime.isLive() && isParentLive();
   function on(element: HTMLElement, handler: () => void) {
     element.addEventListener('click', () => {
       if (isLive() && root.contains(element)) handler();

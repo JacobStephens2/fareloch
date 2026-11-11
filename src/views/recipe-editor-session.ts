@@ -4,31 +4,44 @@ import { mountFoodSearch } from '../food-search-session';
 import { textSpan } from './food-search-text';
 import { mountFoodQuantitySelection } from './food-quantity-selection';
 import { mountMacrosEntry } from './macros-entry';
+import { createMountedLifetime } from '../mounted-lifetime';
 import type { Food, RecipeIngredient } from '../types';
 import { macrosOf, scaleMacros, recipePerServing, roundMacros } from '../../server/src/nutrition';
 
 // One mount owns all editor effects, including work that outlives its DOM.
 export function mountRecipeEditor(root: HTMLElement, recipeId: 'new' | number): () => void {
   const isNew = recipeId === 'new';
-  let disposed = false;
   let quantitySelection: ReturnType<typeof mountFoodQuantitySelection> | undefined;
-  const events = new AbortController();
+  let disposeSearch: (() => void) | undefined;
+  let disposeMacros: (() => void) | undefined;
   const find = <T extends HTMLElement = HTMLElement>(id: string) => root.querySelector<T>(`#${id}`)!;
-  const isLive = () => !disposed && root.isConnected;
+  const { isLive, signal, dispose } = createMountedLifetime(root, {
+    ownedNodes: [...root.querySelectorAll(
+      '#back-btn, #recipe-form, #recipe-name, #recipe-servings, #recipe-unit, [data-mode], #ingredients-section, #ingredients-list, #ing-search, #ing-results, #manual-section, #manual-macros, #recipe-totals, button[type=submit], #copy-recipe, #delete-recipe, #ing-modal, #ing-modal-name, #ing-modal-close, #ing-modal-body',
+    )],
+    cleanup: () => {
+      disposeMacros?.();
+      quantitySelection?.dispose();
+      disposeSearch?.();
+    },
+  });
+  if (!isLive()) return dispose;
 
   function on<K extends keyof HTMLElementEventMap>(element: Element | null, type: K, handler: (event: HTMLElementEventMap[K]) => void) {
     element?.addEventListener(type, event => {
-      if (isLive()) handler(event as HTMLElementEventMap[K]);
-    }, { signal: events.signal });
+      if (isLive() && element && root.contains(element)) handler(event as HTMLElementEventMap[K]);
+    }, { signal });
   }
 
   const ingredients: { foodId: number; servings: number; qty?: number; food: Food | RecipeIngredient; unitLabel?: string }[] = [];
   let mode: 'ingredients' | 'manual' = 'ingredients';
   const session = mountFoodSearch(root, {
     kind: 'ingredient',
+    isParentLive: isLive,
     foods: foodsApi,
     onSelect: food => showIngredientModal(food),
   });
+  disposeSearch = session.dispose;
 
 
   on(find('back-btn'), 'click', () => navigate('#/recipes'));
@@ -40,6 +53,7 @@ export function mountRecipeEditor(root: HTMLElement, recipeId: 'new' | number): 
 
   // Show ingredient add/edit modal with unit picker
   const showIngredientModal = (food: Food | RecipeIngredient, editIndex?: number) => {
+    if (!isLive()) return;
     const isEdit = editIndex !== undefined;
     const modal = find('ing-modal')!;
     find('ing-modal-name')!.textContent = food.name;
@@ -56,6 +70,7 @@ export function mountRecipeEditor(root: HTMLElement, recipeId: 'new' | number): 
     const stored = isEdit ? ingredients[editIndex!] : undefined;
     const selection = mountFoodQuantitySelection(find('ingredient-quantity'), food, {
       kind: 'ingredient',
+      isParentLive: isLive,
       stored: stored ? { servings: stored.servings, quantity: stored.qty } : undefined,
     });
     quantitySelection = selection;
@@ -85,6 +100,7 @@ export function mountRecipeEditor(root: HTMLElement, recipeId: 'new' | number): 
 
   // Edit callback for ingredient rows
   const onEditIngredient = (idx: number) => {
+    if (!isLive()) return;
     const ing = ingredients[idx];
     // A loaded ingredient's row identity is different from its Food identity.
     const food = { ...ing.food, id: ing.foodId };
@@ -104,7 +120,8 @@ export function mountRecipeEditor(root: HTMLElement, recipeId: 'new' | number): 
     });
   });
 
-  const macrosEntry = mountMacrosEntry(find('manual-macros'), 'manual', updateTotals);
+  const macrosEntry = mountMacrosEntry(find('manual-macros'), 'manual', updateTotals, isLive);
+  disposeMacros = macrosEntry.dispose;
 
   // Preview and Save share this one read; Ingredients mode leaves all Manual macros unset.
   function manualMacros() {
@@ -236,6 +253,7 @@ export function mountRecipeEditor(root: HTMLElement, recipeId: 'new' | number): 
   }
 
   function updateTotals() {
+    if (!isLive()) return;
     const servings = parseFloat((find('recipe-servings') as HTMLInputElement)?.value) || 1;
     const unit = (find('recipe-unit') as HTMLInputElement)?.value.trim() || 'serving';
     const totalsEl = find('recipe-totals');
@@ -267,6 +285,7 @@ export function mountRecipeEditor(root: HTMLElement, recipeId: 'new' | number): 
   }
 
   function renderIngredients() {
+    if (!isLive()) return;
     const container = find('ingredients-list')!;
 
     container.innerHTML = '';
@@ -327,12 +346,5 @@ export function mountRecipeEditor(root: HTMLElement, recipeId: 'new' | number): 
     });
   }
 
-  return () => {
-    if (disposed) return;
-    disposed = true;
-    macrosEntry.dispose();
-    quantitySelection?.dispose();
-    session.dispose();
-    events.abort();
-  };
+  return dispose;
 }

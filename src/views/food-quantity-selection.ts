@@ -3,10 +3,10 @@ import type { Food, FoodMeasure } from '../types';
 import { createMountedLifetime } from '../mounted-lifetime';
 
 type QuantityFood = Pick<Food, 'brand' | 'serving_size' | 'serving_unit' | 'calories' | 'carbs_g' | 'protein_g' | 'fat_g' | 'measures'>;
-type QuantityContext = { kind: 'meal' } | {
+type QuantityContext = ({ kind: 'meal' } | {
   kind: 'ingredient';
   stored?: { servings: number; quantity?: number };
-};
+}) & { isParentLive?: () => boolean };
 
 type Selection = {
   quantity: number;
@@ -60,7 +60,8 @@ export function mountFoodQuantitySelection(host: HTMLElement, food: QuantityFood
 
   // Track stable controls rather than the preview text nodes we replace ourselves.
   const controls = [quantityInput, perUnit, perLabel, total, find(ids.minus), find(ids.plus), unitSelect].filter(Boolean);
-  const { isLive, signal, dispose } = createMountedLifetime(host, { ownedNodes: controls });
+  const { isLive: isMounted, signal, dispose } = createMountedLifetime(host, { ownedNodes: controls });
+  const isLive = () => isMounted() && (context.isParentLive?.() ?? true);
   function on(element: HTMLElement | null, event: 'click' | 'input' | 'change', action: () => void) {
     element?.addEventListener(event, () => { if (isLive()) action(); }, { signal });
   }

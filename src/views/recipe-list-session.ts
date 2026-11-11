@@ -3,12 +3,14 @@ import { textSpan } from './food-search-text';
 import { createMountedLifetime } from '../mounted-lifetime';
 
 // Each connected, exclusively owned host gets one read and one permanent lifetime.
-export function mountRecipeList(host: HTMLElement, { kind, read, onSelect }: {
+export function mountRecipeList(host: HTMLElement, { kind, read, onSelect, isParentLive = () => true }: {
   kind: 'manage' | 'meal';
   read: () => Promise<{ recipes: Recipe[] }>;
   onSelect: (recipe: Recipe) => void;
+  isParentLive?: () => boolean;
 }): () => void {
-  const { isLive, signal, dispose } = createMountedLifetime(host);
+  const { isLive: isMounted, signal, dispose } = createMountedLifetime(host);
+  const isLive = () => isMounted() && isParentLive();
 
   async function load() {
     if (!isLive()) return;

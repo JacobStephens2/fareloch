@@ -64,6 +64,41 @@ it('guest Recipe edit/save round trip retains ingredient identity, quantity and 
   expect(network).not.toHaveBeenCalled();
 });
 
+it.each(['create', 'update', 'copy', 'delete'] as const)('guest %s finishes persistence after raw ancestor departure and reconnection', async action => {
+  const { id } = await seedRecipe();
+  const wait = deferred<void>();
+  const operation = recipes[action];
+  // Delay delivery after the actual guest write, preserving the public persistence adapter.
+  const delayed = vi.spyOn(recipes, action).mockImplementation(async (...args: unknown[]) => {
+    const result = await Reflect.apply(operation, recipes, args);
+    await wait.promise;
+    return result;
+  });
+  vi.spyOn(window, 'confirm').mockReturnValue(true);
+  go(action === 'create' ? '/recipes/new' : `/recipes/${id}`);
+  await vi.advanceTimersByTimeAsync(0);
+  change('recipe-name', 'Captured guest draft');
+  if (action === 'create' || action === 'update') submit();
+  else click(action === 'copy' ? '#copy-recipe' : '#delete-recipe');
+  const root = document.querySelector('.page')!;
+  const ancestor = root.parentElement!;
+  ancestor.remove();
+  document.body.append(ancestor);
+  const before = root.outerHTML;
+  const hash = window.location.hash;
+  wait.resolve();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(delayed).toHaveBeenCalledTimes(1);
+  expect(window.location.hash).toBe(hash);
+  expect(root.outerHTML).toBe(before);
+  const saved = (await recipes.list()).recipes;
+  if (action === 'delete') expect(saved).toHaveLength(0);
+  else if (action === 'copy') {
+    expect(saved).toHaveLength(2);
+    expect(saved.find(recipe => recipe.id !== id)?.name).toBe('Guest recipe (Copy)');
+  } else expect(saved.find(recipe => recipe.name === 'Captured guest draft')).toBeDefined();
+});
+
 it('signed-in HTTP adapters preserve update and external-selection inputs across departure', async () => {
   const { id } = await seedRecipe();
   const existing = await recipes.get(id);

@@ -9,11 +9,11 @@ type MacrosEntry<Values> = {
   dispose(): void;
 };
 
-export function mountMacrosEntry(host: HTMLElement, kind: 'manual', onChange?: () => void): MacrosEntry<NullableMacros>;
-export function mountMacrosEntry(host: HTMLElement, kind: 'quick' | 'custom', onChange?: () => void): MacrosEntry<Macros>;
-export function mountMacrosEntry(host: HTMLElement, kind: FormKind, onChange?: () => void): MacrosEntry<NullableMacros>;
+export function mountMacrosEntry(host: HTMLElement, kind: 'manual', onChange?: () => void, isParentLive?: () => boolean): MacrosEntry<NullableMacros>;
+export function mountMacrosEntry(host: HTMLElement, kind: 'quick' | 'custom', onChange?: () => void, isParentLive?: () => boolean): MacrosEntry<Macros>;
+export function mountMacrosEntry(host: HTMLElement, kind: FormKind, onChange?: () => void, isParentLive?: () => boolean): MacrosEntry<NullableMacros>;
 // Controls, parsing and sticky calorie overrides belong to this mounted entry, not its parent's writes.
-export function mountMacrosEntry(host: HTMLElement, kind: FormKind, onChange?: () => void): MacrosEntry<NullableMacros> {
+export function mountMacrosEntry(host: HTMLElement, kind: FormKind, onChange?: () => void, isParentLive = () => true): MacrosEntry<NullableMacros> {
   const prefix = { quick: 'quick', custom: 'cf', manual: 'manual' }[kind];
   host.innerHTML = `
     <div class="form-row">
@@ -33,7 +33,8 @@ export function mountMacrosEntry(host: HTMLElement, kind: FormKind, onChange?: (
   const fields = { calories: field('cal'), carbsG: field('carbs'), proteinG: field('protein'), fatG: field('fat') };
   const controls = Object.values(fields);
   let overridden = false;
-  const { isLive, signal, dispose } = createMountedLifetime(host, { ownedNodes: controls });
+  const { isLive: isMounted, signal, dispose } = createMountedLifetime(host, { ownedNodes: controls });
+  const isLive = () => isMounted() && isParentLive();
   function parse(raw: string): number | null {
     if (kind !== 'manual') return parseFloat(raw) || 0;
     if (raw.trim() === '') return null;
