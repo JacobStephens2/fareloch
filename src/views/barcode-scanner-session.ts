@@ -39,15 +39,16 @@ export function mountBarcodeScanner(root: HTMLElement, {
   const scanButton = find('scan-btn');
   const closeButton = find('scanner-close');
   let cameraAttempt: CameraAttempt | undefined;
+  function cancelCurrentAttempt() {
+    if (cameraAttempt) {
+      cameraAttempt.cancelled = true;
+      cameraAttempt.requestClose();
+    }
+  }
   // Cleanup is initialized before lifetime construction: a disconnected mount retires immediately.
   const lifetime = createMountedLifetime(root, {
     ownedNodes: [scanButton, scannerContainer, scannerSlot, closeButton],
-    cleanup: () => {
-      if (cameraAttempt) {
-        cameraAttempt.cancelled = true;
-        cameraAttempt.requestClose();
-      }
-    },
+    cleanup: cancelCurrentAttempt,
   });
   const isLive = lifetime.isLive;
   function on(element: HTMLElement, handler: () => void) {
@@ -58,18 +59,15 @@ export function mountBarcodeScanner(root: HTMLElement, {
   const validAttempt = (attempt: CameraAttempt) => isLive() && cameraAttempt === attempt && !attempt.cancelled;
 
   function closeScanner() {
-    if (cameraAttempt) {
-      cameraAttempt.cancelled = true;
-      cameraAttempt.requestClose();
-    }
+    cancelCurrentAttempt();
     if (isLive()) scannerContainer.classList.add('hidden');
   }
 
   // Optional constraints never hold camera release or the next attempt hostage.
   async function enhanceCamera(attempt: CameraAttempt) {
     try {
-      const track = attempt.host.querySelector('video')?.srcObject as MediaStream | null;
-      const cameraTrack = track?.getVideoTracks()[0];
+      const stream = attempt.host.querySelector('video')?.srcObject as MediaStream | null;
+      const cameraTrack = stream?.getVideoTracks()[0];
       if (!cameraTrack || !validAttempt(attempt) || attempt.consumed) return;
       // html5-qrcode 2.3.8 applies its aspectRatio option before attaching srcObject.
       // Apply the preference after startup so a rejected constraint leaves owned tracks reachable.
