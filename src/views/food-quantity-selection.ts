@@ -1,5 +1,6 @@
 import { macrosOf, roundMacros, scaleMacros, unitScale } from '../../server/src/nutrition';
 import type { Food, FoodMeasure } from '../types';
+import { createMountedLifetime } from '../mounted-lifetime';
 
 type QuantityFood = Pick<Food, 'brand' | 'serving_size' | 'serving_unit' | 'calories' | 'carbs_g' | 'protein_g' | 'fat_g' | 'measures'>;
 type QuantityContext = { kind: 'meal' } | {
@@ -57,32 +58,11 @@ export function mountFoodQuantitySelection(host: HTMLElement, food: QuantityFood
   if (ingredient) updateTotal();
   else assignTotalMacros(total, food);
 
-  let disposed = false;
-  const events = new AbortController();
   // Track stable controls rather than the preview text nodes we replace ourselves.
   const controls = [quantityInput, perUnit, perLabel, total, find(ids.minus), find(ids.plus), unitSelect].filter(Boolean);
-  const observer = new MutationObserver(records => {
-    if (wasRemoved(records)) dispose();
-  });
-  function wasRemoved(records: MutationRecord[]) {
-    return records.some(record => [...record.removedNodes].some(node =>
-      controls.some(control => node === control || node.contains(control)),
-    ));
-  }
-  function dispose() {
-    if (disposed) return;
-    disposed = true;
-    observer.disconnect();
-    events.abort();
-  }
-  function isLive() {
-    // Drain queued removals too: detach/reconnect in one synchronous turn must not revive a form.
-    if (wasRemoved(observer.takeRecords()) || !host.isConnected || controls.some(control => !host.contains(control))) dispose();
-    return !disposed;
-  }
-  observer.observe(host.ownerDocument, { childList: true, subtree: true });
+  const { isLive, signal, dispose } = createMountedLifetime(host, { ownedNodes: controls });
   function on(element: HTMLElement | null, event: 'click' | 'input' | 'change', action: () => void) {
-    element?.addEventListener(event, () => { if (isLive()) action(); }, { signal: events.signal });
+    element?.addEventListener(event, () => { if (isLive()) action(); }, { signal });
   }
   on(quantityInput, 'input', updateTotal);
   on(find(ids.minus), 'click', () => {

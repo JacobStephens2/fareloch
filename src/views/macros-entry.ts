@@ -1,4 +1,5 @@
 import { caloriesFromMacros, type Macros } from '../../server/src/nutrition';
+import { createMountedLifetime } from '../mounted-lifetime';
 
 type FormKind = 'quick' | 'custom' | 'manual';
 type NullableMacros = { [Field in keyof Macros]: number | null };
@@ -32,29 +33,7 @@ export function mountMacrosEntry(host: HTMLElement, kind: FormKind, onChange?: (
   const fields = { calories: field('cal'), carbsG: field('carbs'), proteinG: field('protein'), fatG: field('fat') };
   const controls = Object.values(fields);
   let overridden = false;
-  let disposed = false;
-  const events = new AbortController();
-  // Remember ancestors before removal: moving a retained entry out of a removed ancestor cannot revive it.
-  const ancestors = new Set<Node>();
-  for (let node: Node | null = host; node; node = node.parentNode) ancestors.add(node);
-  const wasRemoved = (records: MutationRecord[]) => records.some(record =>
-    [...record.removedNodes].some(node => ancestors.has(node) || controls.some(control => node === control || node.contains(control))),
-  );
-  const observer = new MutationObserver(records => { if (wasRemoved(records)) dispose(); });
-  observer.observe(host.ownerDocument, { childList: true, subtree: true });
-
-  function dispose() {
-    if (disposed) return;
-    disposed = true;
-    events.abort();
-    observer.disconnect();
-  }
-  function isLive() {
-    if (disposed) return false;
-    // Input/read/hydrate can run before the observer's microtask after synchronous removal and reattachment.
-    if (wasRemoved(observer.takeRecords()) || !host.isConnected || controls.some(control => !host.contains(control))) dispose();
-    return !disposed;
-  }
+  const { isLive, signal, dispose } = createMountedLifetime(host, { ownedNodes: controls });
   function parse(raw: string): number | null {
     if (kind !== 'manual') return parseFloat(raw) || 0;
     if (raw.trim() === '') return null;
@@ -73,7 +52,7 @@ export function mountMacrosEntry(host: HTMLElement, kind: FormKind, onChange?: (
         ));
       }
       onChange?.();
-    }, { signal: events.signal });
+    }, { signal });
   }
   return {
     read() {

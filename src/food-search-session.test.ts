@@ -209,6 +209,58 @@ it('disposes pending timers, reads and listeners without rewriting the parent DO
   expect(notified).toHaveBeenCalledTimes(2);
 });
 
+it.each(['guard', 'observer'] as const)('implicit retirement releases input notifications and cancels a pending debounce with %s first', async first => {
+  const { root, input, host, operations, session, type, notified } = setup();
+  session.setActive(true);
+  type('apple');
+  const before = host.innerHTML;
+  root.remove();
+  document.body.append(root);
+  if (first === 'guard') session.setQuery('later');
+  else await Promise.resolve();
+  input.dispatchEvent(new Event('input'));
+  await vi.advanceTimersByTimeAsync(500);
+  expect(operations.search).not.toHaveBeenCalled();
+  expect(notified).toHaveBeenCalledTimes(1);
+  expect(input.value).toBe('apple');
+  expect(host.innerHTML).toBe(before);
+});
+
+it.each(['success', 'failure'] as const)('implicit retirement suppresses a queued search %s before observer delivery', async outcome => {
+  const { root, host, operations, session, type } = setup('meal');
+  const pending = deferred<FoodSearchResult>();
+  operations.search.mockReturnValueOnce(pending.promise);
+  session.setActive(true);
+  type('apple');
+  await vi.advanceTimersByTimeAsync(400);
+  const before = root.innerHTML;
+  if (outcome === 'success') pending.resolve(result('Departed apple'));
+  else pending.reject(new Error('Departed read'));
+  root.remove();
+  document.body.append(root);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(root.innerHTML).toBe(before);
+  expect(host.querySelector('.food-item, .form-error')).toBeNull();
+});
+
+it('an initially disconnected Food search remains inactive after attachment', async () => {
+  const root = document.createElement('section');
+  root.innerHTML = '<input id="food-search"><div id="tab-content">Keep</div>';
+  const operations = { search: vi.fn(), recent: vi.fn(), saveExternal: vi.fn() };
+  const notified = vi.fn();
+  const session = mountFoodSearch(root, { kind: 'meal', foods: operations, onSelect: vi.fn(), onQueryInput: notified });
+  disposals.push(session.dispose);
+  document.body.append(root);
+  session.setActive(true);
+  session.setQuery('apple');
+  root.querySelector('input')!.dispatchEvent(new Event('input'));
+  await vi.advanceTimersByTimeAsync(500);
+  expect(operations.recent).not.toHaveBeenCalled();
+  expect(operations.search).not.toHaveBeenCalled();
+  expect(notified).not.toHaveBeenCalled();
+  expect(root.querySelector('div')!.textContent).toBe('Keep');
+});
+
 it.each(['meal', 'ingredient'] as const)('%s keeps partial saved matches selectable with searching feedback until completion', async kind => {
   const { host, input, operations, session, type, selected } = setup(kind);
   const pending = deferred<FoodSearchResult>();

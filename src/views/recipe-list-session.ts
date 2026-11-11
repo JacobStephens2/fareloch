@@ -1,5 +1,6 @@
 import type { Recipe } from '../types';
 import { textSpan } from './food-search-text';
+import { createMountedLifetime } from '../mounted-lifetime';
 
 // Each connected, exclusively owned host gets one read and one permanent lifetime.
 export function mountRecipeList(host: HTMLElement, { kind, read, onSelect }: {
@@ -7,33 +8,7 @@ export function mountRecipeList(host: HTMLElement, { kind, read, onSelect }: {
   read: () => Promise<{ recipes: Recipe[] }>;
   onSelect: (recipe: Recipe) => void;
 }): () => void {
-  let disposed = false;
-  const events = new AbortController();
-  const ancestors = new Set<Node>();
-  for (let node: Node | null = host; node; node = node.parentNode) ancestors.add(node);
-  const departed = (records: MutationRecord[]) => records.some(record =>
-    Array.from(record.removedNodes).some(node => ancestors.has(node)));
-  const departure = new MutationObserver(records => {
-    if (departed(records)) dispose();
-  });
-  departure.observe(host.ownerDocument, { childList: true, subtree: true });
-
-  function dispose() {
-    if (disposed) return;
-    disposed = true;
-    events.abort();
-    departure.disconnect();
-  }
-
-  function isLive() {
-    if (disposed) return false;
-    // A selection or read may settle before the removal observer's microtask.
-    if (!host.isConnected || departed(departure.takeRecords())) {
-      dispose();
-      return false;
-    }
-    return true;
-  }
+  const { isLive, signal, dispose } = createMountedLifetime(host);
 
   async function load() {
     if (!isLive()) return;
@@ -69,7 +44,7 @@ export function mountRecipeList(host: HTMLElement, { kind, read, onSelect }: {
         row.append(info, macros);
         row.addEventListener('click', () => {
           if (isLive() && host.contains(row)) onSelect(recipe);
-        }, { signal: events.signal });
+        }, { signal });
         host.append(row);
       }
     } catch {
