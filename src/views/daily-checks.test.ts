@@ -4,6 +4,7 @@ import { setGuestMode } from '../local-db';
 import { route, startRouter } from '../router';
 import { state } from '../state';
 import { dashboardView } from './dashboard';
+import { departAndReconnect } from '../test/mounted-lifetime-fixtures';
 
 function go(path: string) {
   window.history.replaceState(null, '', `#${path}`);
@@ -304,6 +305,23 @@ it('guest submitted persistence survives route departure without reviving the ol
   expect(storageRead.mock.calls.filter(([key]) => key === 'guest_daily_checks')).toHaveLength(0);
   expect(oldChip.disabled).toBe(true);
   expect(oldChip.getAttribute('aria-pressed')).toBe('false');
+  await showDashboard();
+  expectChecks(['creatine']);
+});
+
+it('guest Daily checks persistence survives same-turn retirement without a follow-up read', async () => {
+  await showDashboard();
+  const root = document.querySelector<HTMLElement>('#app .dashboard-page')!;
+  const oldChip = chip('creatine');
+  oldChip.click();
+  departAndReconnect(root, 'root');
+  const html = root.innerHTML;
+  const storageRead = vi.spyOn(Storage.prototype, 'getItem');
+  await settle();
+  expect(storageRead.mock.calls.filter(([key]) => key === 'guest_daily_checks')).toHaveLength(0);
+  expect(root.innerHTML).toBe(html);
+  expect(oldChip.disabled).toBe(true);
+  expect(await dailyChecks.get('2026-11-04')).toEqual({ checks: ['creatine'] });
   await showDashboard();
   expectChecks(['creatine']);
 });

@@ -4,6 +4,7 @@ import { getToken, setToken } from '../api';
 import { getGuestUser, isGuestMode, setGuestMode } from '../local-db';
 import { state } from '../state';
 import { deferred } from '../test/food-search-fixtures';
+import { departAndReconnect } from '../test/mounted-lifetime-fixtures';
 import { forgotPasswordView, loginView, resetPasswordView } from './auth';
 import { mountPasswordRecovery } from './password-recovery-session';
 import html from '../../index.html?raw';
@@ -56,6 +57,84 @@ beforeEach(() => {
   localStorage.clear();
   state.user = null;
   vi.useFakeTimers();
+});
+
+it.each(flows.flatMap(flow => ['root', 'fixed replacement'].map(departure => ({ flow, departure }))))(
+  '$flow.kind permanently retires on same-turn $departure before router cleanup', async ({ flow, departure }) => {
+    const network = vi.fn().mockResolvedValue(new Response(JSON.stringify({ success: true })));
+    vi.stubGlobal('fetch', network);
+    go(flow.path);
+    const root = document.querySelector<HTMLElement>('#app .auth-container')!;
+    root.querySelector<HTMLInputElement>(`#${flow.input}`)!.value = flow.value;
+    departAndReconnect(root, departure, `#${flow.input}`);
+    const before = snapshot(root);
+    submit(root.querySelector('form')!);
+    await settle();
+    expect(network).not.toHaveBeenCalled();
+    expect(snapshot(root)).toEqual(before);
+    expect(window.location.hash).toBe(`#${flow.path}`);
+  },
+);
+
+it.each(flows.flatMap(flow => ['success', 'failure'].map(outcome => ({ flow, outcome }))))(
+  '$flow.kind accepted recovery stays silent after ancestor retirement with $outcome', async ({ flow, outcome }) => {
+    const pending = deferred<Response>();
+    const network = vi.fn(() => pending.promise);
+    vi.stubGlobal('fetch', network);
+    go(flow.path);
+    const root = document.querySelector<HTMLElement>('#app .auth-container')!;
+    begin(flow, root);
+    await Promise.resolve();
+    const before = snapshot(root);
+    departAndReconnect(root, 'ancestor');
+    await Promise.resolve();
+    if (outcome === 'success') pending.resolve(Response.json({ success: true }));
+    else pending.reject(new Error('Late failure'));
+    await settle();
+    await vi.advanceTimersByTimeAsync(2100);
+    expect(snapshot(root)).toEqual(before);
+    expect(window.location.hash).toBe(`#${flow.path}`);
+    submit(root.querySelector('form')!);
+    expect(network).toHaveBeenCalledExactlyOnceWith(flow.endpoint, expect.objectContaining({
+      method: 'POST', body: JSON.stringify(flow.payload), credentials: 'include',
+    }));
+    expect(vi.getTimerCount()).toBe(0);
+  },
+);
+
+it.each(flows)('initially disconnected $kind mounts stay retired and a fresh mount works', async flow => {
+  const network = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ success: true }))));
+  vi.stubGlobal('fetch', network);
+  go('/other');
+  const holder = document.createElement('div');
+  holder.innerHTML = (flow.kind === 'forgot' ? forgotPasswordView() : resetPasswordView()).html;
+  const root = holder.querySelector<HTMLElement>('.auth-container')!;
+  disposeSession = mountPasswordRecovery(root, flow.kind === 'forgot' ? { kind: 'forgot' } : { kind: 'reset', token: 'mounted-token' });
+  document.querySelector('#app')!.append(root);
+  begin(flow, root);
+  await settle();
+  expect(network).not.toHaveBeenCalled();
+  disposeSession();
+  disposeSession();
+  go(flow.path);
+  begin(flow);
+  await settle();
+  expect(network).toHaveBeenCalledTimes(1);
+  expect(document.querySelector(`#${flow.kind}-msg`)!.textContent).toBe(flow.success);
+});
+
+it('ancestor retirement releases a successful reset redirect before reconnection', async () => {
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ success: true }))));
+  go(flows[1].path);
+  begin(flows[1]);
+  await settle();
+  const root = document.querySelector<HTMLElement>('#app .auth-container')!;
+  expect(vi.getTimerCount()).toBe(1);
+  departAndReconnect(root, 'ancestor');
+  await Promise.resolve();
+  expect(vi.getTimerCount()).toBe(0);
+  await vi.advanceTimersByTimeAsync(2100);
+  expect(window.location.hash).toBe(`#${flows[1].path}`);
 });
 
 afterEach(() => {

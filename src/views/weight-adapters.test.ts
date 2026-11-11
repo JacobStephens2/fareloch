@@ -4,8 +4,19 @@ import { auth, setToken, weight } from '../api';
 import { getGuestUser, localAuth, localWeight, setGuestMode } from '../local-db';
 import { deferred } from '../test/food-search-fixtures';
 import { beginWeightOperation, go, input, reading, ResizeObserverStub, startWeightRoutes, submit, submitReading } from '../test/weight-fixtures';
+import { departAndReconnect } from '../test/mounted-lifetime-fixtures';
+import { mountWeight } from './weight-session';
+import { weightView } from './weight';
 
 const settle = () => vi.advanceTimersByTimeAsync(0);
+
+function presentation(root: Element) {
+  const copy = document.createElement('div');
+  copy.innerHTML = root.innerHTML;
+  // Chart.destroy restores its canvas attributes as part of resource release.
+  copy.querySelector('canvas')?.replaceWith(document.createElement('canvas'));
+  return copy.innerHTML;
+}
 
 beforeAll(startWeightRoutes);
 
@@ -20,9 +31,125 @@ beforeEach(() => {
 
 afterEach(() => {
   go('/other');
+  document.querySelector('#retained')?.remove();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.useRealTimers();
+});
+
+it.each(['root', 'fixed replacement'])('Weight permanently retires on same-turn %s before router cleanup', async departure => {
+  await weight.log({ date: '2026-11-04', weightLbs: 165 });
+  go('/weight');
+  await settle();
+  const root = document.querySelector<HTMLElement>('#app .page')!;
+  const chart = Chart.getChart(root.querySelector<HTMLCanvasElement>('canvas')!)!;
+  const destroy = vi.spyOn(chart, 'destroy');
+  input('weight-lbs', '180');
+  input('waist-ceiling', '32');
+  const logs = await weight.list();
+  departAndReconnect(root, departure, '#weight-lbs');
+  const before = presentation(root);
+  submit('weight-form', root);
+  submit('waist-ceiling-form', root);
+  root.querySelector<HTMLButtonElement>('.btn-delete-weight')!.click();
+  await settle();
+  expect(await weight.list()).toEqual(logs);
+  expect((await auth.me()).user.targetWaistInches).toBeNull();
+  expect(window.confirm).not.toHaveBeenCalled();
+  expect(presentation(root)).toBe(before);
+  expect(destroy).toHaveBeenCalledTimes(1);
+  go('/other');
+  expect(destroy).toHaveBeenCalledTimes(1);
+});
+
+it('guest Weight persists an accepted log whose continuation precedes ancestor observer delivery', async () => {
+  go('/weight');
+  await settle();
+  const root = document.querySelector<HTMLElement>('#app .page')!;
+  submitReading();
+  const before = presentation(root);
+  // The real guest adapter has persisted and queued its fulfilled continuation.
+  departAndReconnect(root, 'ancestor');
+  const reads = vi.spyOn(Storage.prototype, 'getItem');
+  await settle();
+  expect(reads.mock.calls.filter(([key]) => key === 'guest_weight' || key === 'guest_user')).toHaveLength(0);
+  expect(presentation(root)).toBe(before);
+  expect(root.querySelector<HTMLInputElement>('#weight-lbs')!.value).toBe('180');
+  expect(root.querySelector<HTMLButtonElement>('#weight-form button')!.disabled).toBe(true);
+  expect((await weight.list()).logs).toEqual([{
+    id: 1, date: '2026-11-03', time: '18:45', weight_lbs: 180, waist_inches: 31.2, notes: null,
+  }]);
+  expect(Chart.getChart(root.querySelector<HTMLCanvasElement>('canvas')!)).toBeUndefined();
+  expect(window.alert).not.toHaveBeenCalled();
+});
+
+it('Weight consumes a late HTTP log failure after ancestor observer retirement', async () => {
+  setGuestMode(false);
+  const pending = deferred<Response>();
+  const network = vi.fn((url: string, options?: RequestInit) => options?.method === 'POST'
+    ? pending.promise : Promise.resolve(Response.json(url.includes('/weight') ? { logs: [reading()] } : { user: getGuestUser() })));
+  vi.stubGlobal('fetch', network);
+  go('/weight');
+  await settle();
+  const root = document.querySelector<HTMLElement>('#app .page')!;
+  submitReading();
+  const before = presentation(root);
+  departAndReconnect(root, 'ancestor');
+  await Promise.resolve();
+  const requests = network.mock.calls.length;
+  pending.reject(new Error('Late log failure'));
+  await settle();
+  expect(presentation(root)).toBe(before);
+  expect(root.querySelector<HTMLInputElement>('#weight-lbs')!.value).toBe('180');
+  expect(network).toHaveBeenCalledTimes(requests);
+  expect(window.alert).not.toHaveBeenCalled();
+  expect(Chart.getChart(root.querySelector<HTMLCanvasElement>('canvas')!)).toBeUndefined();
+});
+
+it('an initially disconnected Weight mount starts no reads or chart and a fresh mount works', async () => {
+  go('/other');
+  const holder = document.createElement('div');
+  holder.innerHTML = weightView().html;
+  const root = holder.querySelector<HTMLElement>('.page')!;
+  const reads = vi.spyOn(Storage.prototype, 'getItem');
+  const dispose = mountWeight(root);
+  document.querySelector('#app')!.append(root);
+  input('weight-lbs', '180', root);
+  submit('weight-form', root);
+  await settle();
+  expect(reads.mock.calls.filter(([key]) => key === 'guest_weight' || key === 'guest_user')).toHaveLength(0);
+  expect(Chart.getChart(root.querySelector<HTMLCanvasElement>('canvas')!)).toBeUndefined();
+  expect((await weight.list()).logs).toEqual([]);
+  dispose();
+  dispose();
+  go('/weight');
+  await settle();
+  expect(document.querySelector('#app #weight-trend-value')!.textContent).toBe('No logs yet');
+  expect(Chart.getChart(document.querySelector<HTMLCanvasElement>('#app canvas')!)).toBeDefined();
+});
+
+it('Weight initializes the current outlet while an older screen stays connected before it', async () => {
+  await weight.log({ date: '2026-11-04', weightLbs: 165 });
+  const retained = document.createElement('div');
+  retained.id = 'retained';
+  retained.innerHTML = weightView().html;
+  document.body.prepend(retained);
+  go('/weight');
+  await settle();
+  const root = document.querySelector<HTMLElement>('#app .page')!;
+  expect(Chart.getChart(retained.querySelector<HTMLCanvasElement>('canvas')!)).toBeUndefined();
+  expect(retained.querySelector('#weight-trend-value')!.textContent).toBe('Loading...');
+  expect(root.querySelector('#weight-trend-value')!.textContent).toBe('165.0 lbs');
+  input('weight-lbs', '180', retained);
+  submit('weight-form', retained);
+  expect((await weight.list()).logs).toHaveLength(1);
+  input('weight-lbs', '181', root);
+  submit('weight-form', root);
+  await settle();
+  expect((await weight.list()).logs.map(log => log.weight_lbs)).toEqual([181, 165]);
+  const canvas = root.querySelector<HTMLCanvasElement>('canvas')!;
+  go('/other');
+  expect(Chart.getChart(canvas)).toBeUndefined();
 });
 
 it('guest Weight persists captured readings, saves and disables the ceiling, and deletes through its controls', async () => {

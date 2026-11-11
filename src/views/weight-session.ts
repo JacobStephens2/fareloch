@@ -1,22 +1,37 @@
 import { auth, weight as weightApi } from '../api';
 import type { WeightLog } from '../types';
+import { createMountedLifetime } from '../mounted-lifetime';
 import { calculateWeightTrend } from '../../server/src/weight-trend';
 import { Chart, LineController, LineElement, PointElement, LinearScale, Tooltip, Filler, Legend } from 'chart.js';
 
 Chart.register(LineController, LineElement, PointElement, LinearScale, Tooltip, Filler, Legend);
 
 export function mountWeight(root: HTMLElement): () => void {
-  let disposed = false;
   let refreshRevision = 0;
   let chartInstance: Chart | null = null;
-  const events = new AbortController();
-  const isLive = () => !disposed && root.isConnected;
   const find = <T extends HTMLElement = HTMLElement>(id: string) => root.querySelector<T>(`#${id}`)!;
+  const lifetime = createMountedLifetime(root, {
+    ownedNodes: [...root.querySelectorAll(`
+      #weight-form, #weight-form input, #weight-form button,
+      #waist-ceiling-form, #waist-ceiling-form input, #waist-ceiling-form button,
+      #waist-ceiling-message, #waist-summary, #weight-trend-summary,
+      #weight-trend-value, #weight-weekly-change, #weight-trend-as-of,
+      #weight-chart, #weight-history
+    `)],
+    cleanup: () => {
+      ++refreshRevision;
+      const chart = chartInstance;
+      chartInstance = null;
+      chart?.destroy();
+    },
+  });
+  const { isLive } = lifetime;
+  if (!isLive()) return lifetime.dispose;
 
   function on(element: Element, type: string, handler: (event: Event) => void) {
     element.addEventListener(type, event => {
       if (isLive() && root.contains(element)) handler(event);
-    }, { signal: events.signal });
+    }, { signal: lifetime.signal });
   }
 
   on(find('weight-form'), 'submit', async (e) => {
@@ -65,15 +80,7 @@ export function mountWeight(root: HTMLElement): () => void {
 
   void loadWeightData();
 
-  return () => {
-    if (disposed) return;
-    disposed = true;
-    ++refreshRevision;
-    events.abort();
-    const chart = chartInstance;
-    chartInstance = null;
-    chart?.destroy();
-  };
+  return lifetime.dispose;
 
   async function loadWeightData() {
     if (!isLive()) return;

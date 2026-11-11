@@ -190,7 +190,7 @@ export function settingsView() {
       </div>
     `,
     init: () => {
-      const root = document.querySelector<HTMLElement>('.page')!;
+      const root = document.getElementById('app')!.querySelector<HTMLElement>('.page')!;
       setCleanup(mountSettingsForms(root));
 
       // Theme toggle

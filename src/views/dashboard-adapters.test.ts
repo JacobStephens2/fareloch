@@ -1,9 +1,29 @@
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
-import { meals, workoutDays, setToken } from '../api';
+import { foods, meals, workoutDays, setToken } from '../api';
 import { seedSampleData, setGuestMode } from '../local-db';
 import { route, startRouter } from '../router';
 import { state, todayStr } from '../state';
 import { dashboardView } from './dashboard';
+import { deferred } from '../test/food-search-fixtures';
+import { departAndReconnect } from '../test/mounted-lifetime-fixtures';
+
+async function showFoodMeal() {
+  const { food } = await foods.create({ name: 'Apple', serving_size: 100, serving_unit: 'g', calories: 100, protein_g: 5 });
+  await meals.log({ date: '2026-04-01', mealType: 'breakfast', foodId: food.id, servings: 2 });
+  go('/');
+  await ready(1);
+  return document.querySelector<HTMLElement>('.meal-item')!;
+}
+
+function tap(item: HTMLElement) {
+  item.dispatchEvent(new MouseEvent('mousedown', { clientX: 100, clientY: 10 }));
+  document.dispatchEvent(new MouseEvent('mouseup', { clientX: 100, clientY: 10 }));
+}
+
+async function openFoodMeal() {
+  tap(await showFoodMeal());
+  return document.querySelector<HTMLElement>('#app .dashboard-page')!;
+}
 
 function go(path: string) {
   window.history.replaceState(null, '', `#${path}`);
@@ -36,8 +56,158 @@ beforeEach(() => {
 
 afterEach(() => {
   go('/other');
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+it.each(['root', 'fixed replacement'])('Dashboard permanently retires on same-turn %s before router cleanup', async departure => {
+  const root = await openFoodMeal();
+  const saved = await meals.getByDate('2026-04-01');
+  departAndReconnect(root, departure, '#workout-toggle');
+  const before = root.innerHTML;
+  click('edit-serv-plus');
+  click('edit-save-btn');
+  click('edit-delete-btn');
+  click('edit-modal-close');
+  click('date-label');
+  click('date-prev');
+  click('copy-prev-btn');
+  await Promise.resolve();
+  expect(root.innerHTML).toBe(before);
+  expect(state.selectedDate).toBe('2026-04-01');
+  expect(document.querySelector('body > input[type="date"]')).toBeNull();
+  expect(await meals.getByDate('2026-04-01')).toEqual(saved);
+  expect(window.confirm).not.toHaveBeenCalled();
+});
+
+it.each(['edit-serv-minus', 'edit-serv-plus', 'edit-modal-close', 'date-label'])(
+  '%s checks retirement before its first view effect', async action => {
+    const root = await openFoodMeal();
+    const quantity = root.querySelector<HTMLInputElement>('#edit-servings')!;
+    departAndReconnect(root, 'root');
+    const before = root.innerHTML;
+    click(action);
+    expect(quantity.value).toBe('2');
+    expect(root.innerHTML).toBe(before);
+    expect(document.querySelector('body > input[type="date"]')).toBeNull();
+  },
+);
+
+it.each(['movement', 'cancellation'])('Dashboard rejects gesture %s after same-turn ancestor departure', async action => {
+  const item = await showFoodMeal();
+  item.dispatchEvent(new MouseEvent('mousedown', { clientX: 200, clientY: 10 }));
+  const root = document.querySelector<HTMLElement>('#app .dashboard-page')!;
+  departAndReconnect(root, 'ancestor');
+  const before = item.getAttribute('style');
+  if (action === 'movement') document.dispatchEvent(new MouseEvent('mousemove', { clientX: 50, clientY: 10 }));
+  else item.dispatchEvent(new Event('touchcancel'));
+  document.dispatchEvent(new MouseEvent('mouseup'));
+  expect(item.getAttribute('style')).toBe(before);
+  expect((await meals.getByDate('2026-04-01')).meals).toHaveLength(1);
+});
+
+it('guest copy persists before ancestor retirement and its completion precedes observer delivery', async () => {
+  await meals.quickLog({ date: '2026-03-31', mealType: 'lunch', name: 'Copy source', calories: 300 });
+  const root = await openFoodMeal();
+  const write = Storage.prototype.setItem;
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
+    write.call(this, key, value);
+    // Schedule departure before the accepted write queues its continuation.
+    if (key === 'guest_meals') queueMicrotask(() => departAndReconnect(root, 'ancestor'));
+  });
+  click('copy-prev-btn');
+  const before = root.innerHTML;
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(root.innerHTML).toBe(before);
+  expect((await meals.getByDate('2026-04-01')).meals).toHaveLength(2);
+  go('/');
+  await ready(2);
+  click('date-prev');
+  expect(state.selectedDate).toBe('2026-03-31');
+});
+
+it('a late HTTP copy failure stays silent after observer retirement', async () => {
+  setGuestMode(false);
+  const pending = deferred<Response>();
+  const network = vi.fn((url: string, options?: RequestInit) => {
+    if (options?.method === 'POST') return pending.promise;
+    return Promise.resolve(Response.json(url.includes('/workout-days/') ? { isWorkoutDay: false }
+      : url.includes('/daily-checks/') ? { checks: [] } : { meals: [] }));
+  });
+  vi.stubGlobal('fetch', network);
+  go('/');
+  await vi.waitFor(() => expect(document.querySelectorAll('.meal-section')).toHaveLength(4));
+  click('copy-prev-btn');
+  const root = document.querySelector<HTMLElement>('#app .dashboard-page')!;
+  const before = root.innerHTML;
+  departAndReconnect(root, 'ancestor');
+  await Promise.resolve();
+  const requests = network.mock.calls.length;
+  pending.reject(new Error('Late copy failure'));
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(root.innerHTML).toBe(before);
+  expect(network).toHaveBeenCalledTimes(requests);
+  expect(network).toHaveBeenCalledWith('/api/meals/copy', expect.objectContaining({
+    method: 'POST', body: JSON.stringify({ fromDate: '2026-03-31', toDate: '2026-04-01' }),
+  }));
+});
+
+it.each(['missing', 'replacement'])('Dashboard retirement leaves a %s modal and its successor alone', async mode => {
+  await openFoodMeal();
+  const modal = document.querySelector<HTMLElement>('#edit-meal-modal')!;
+  const close = document.querySelector<HTMLButtonElement>('#edit-modal-close')!;
+  const replacement = modal.cloneNode(true) as HTMLElement;
+  replacement.querySelector('#edit-meal-body')!.textContent = 'Successor content';
+  if (mode === 'missing') modal.remove();
+  else modal.replaceWith(replacement);
+  const oldHTML = modal.innerHTML;
+  const newHTML = replacement.innerHTML;
+  close.click();
+  click('date-prev');
+  await Promise.resolve();
+  expect(modal.innerHTML).toBe(oldHTML);
+  expect(replacement.innerHTML).toBe(newHTML);
+  expect(state.selectedDate).toBe('2026-04-01');
+});
+
+it('temporary picker removal and modal rendering leave Dashboard live', async () => {
+  await openFoodMeal();
+  click('edit-serv-plus');
+  expect(document.querySelector<HTMLInputElement>('#edit-servings')!.value).toBe('3');
+  click('edit-modal-close');
+  tap(document.querySelector<HTMLElement>('.meal-item')!);
+  expect(document.querySelector<HTMLInputElement>('#edit-servings')!.value).toBe('2');
+  click('date-label');
+  document.querySelector('body > input[type="date"]')!.remove();
+  await Promise.resolve();
+  click('date-label');
+  const picker = document.querySelector<HTMLInputElement>('body > input[type="date"]')!;
+  picker.value = '2026-03-30';
+  picker.dispatchEvent(new Event('change'));
+  expect(state.selectedDate).toBe('2026-03-30');
+  expect(document.querySelector('#edit-meal-body')!.children).toHaveLength(0);
+});
+
+it('ancestor retirement releases swipe timers, frames and the temporary picker', async () => {
+  const item = await showFoodMeal();
+  click('date-label');
+  const picker = document.querySelector<HTMLInputElement>('body > input[type="date"]')!;
+  vi.useFakeTimers();
+  item.dispatchEvent(new MouseEvent('mousedown', { clientX: 200, clientY: 10 }));
+  document.dispatchEvent(new MouseEvent('mousemove', { clientX: 50, clientY: 10 }));
+  document.dispatchEvent(new MouseEvent('mouseup'));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(vi.getTimerCount()).toBeGreaterThan(0);
+  const root = document.querySelector<HTMLElement>('#app .dashboard-page')!;
+  departAndReconnect(root, 'ancestor');
+  await Promise.resolve();
+  expect(vi.getTimerCount()).toBe(0);
+  expect(picker.isConnected).toBe(false);
+  picker.value = '2025-01-01';
+  picker.dispatchEvent(new Event('change'));
+  expect(state.selectedDate).toBe('2026-04-01');
 });
 
 it('guest Dashboard selects, copies, edits and deletes through the local adapters', async () => {

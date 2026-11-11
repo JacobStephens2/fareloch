@@ -186,6 +186,8 @@ it.each(['route departure', 'disconnected root', 'history refresh'] as const)('r
     submit('waist-ceiling-form');
     await settle();
   }
+  // Observer retirement now releases the chart, restoring canvas attributes.
+  await Promise.resolve();
   vi.mocked(weight.log).mockClear();
   vi.mocked(auth.updateProfile).mockClear();
   vi.mocked(weight.delete).mockClear();
