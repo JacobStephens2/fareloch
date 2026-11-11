@@ -1,9 +1,9 @@
 import { recipes as recipesApi, foods as foodsApi } from '../api';
 import { navigate } from '../router';
-import { createFoodSearchSession, type FoodSearchResult } from '../food-search-session';
-import { macroChips, measureCountSuffix, savedMeasureSuffix, sourceLabel, textSpan } from './food-search-text';
+import { mountFoodSearch } from '../food-search-session';
+import { textSpan } from './food-search-text';
 import { mountFoodQuantitySelection } from './food-quantity-selection';
-import type { ExternalFood, Food, RecipeIngredient } from '../types';
+import type { Food, RecipeIngredient } from '../types';
 import { macrosOf, scaleMacros, recipePerServing, roundMacros, caloriesFromMacros } from '../../server/src/nutrition';
 
 
@@ -33,21 +33,10 @@ export function mountRecipeEditor(root: HTMLElement, recipeId: 'new' | number): 
 
   const ingredients: { foodId: number; servings: number; qty?: number; food: Food | RecipeIngredient; unitLabel?: string }[] = [];
   let mode: 'ingredients' | 'manual' = 'ingredients';
-  const searchInput = find('ing-search') as HTMLInputElement;
-  const results = find('ing-results')!;
-  const session = createFoodSearchSession({
-    search: (query, onSaved) => foodsApi.search(query, onSaved),
-    onChange: snapshot => {
-      if (!isLive()) return;
-      searchInput.classList.toggle('searching', snapshot.status === 'debouncing' || snapshot.status === 'loading' || snapshot.status === 'partial');
-      results.innerHTML = '';
-      results.classList.toggle('hidden', snapshot.status !== 'ready' && snapshot.status !== 'partial' && snapshot.status !== 'error');
-      if (snapshot.status === 'ready' || snapshot.status === 'partial') {
-        renderIngredientResults(snapshot.result);
-        if (snapshot.status === 'partial') results.insertAdjacentHTML('beforeend', '<p class="text-muted">Searching external foods...</p>');
-      }
-      if (snapshot.status === 'error') results.innerHTML = '<p class="form-error" style="padding:8px">Search failed</p>';
-    },
+  const session = mountFoodSearch(root, {
+    kind: 'ingredient',
+    foods: foodsApi,
+    onSelect: food => showIngredientModal(food),
   });
 
 
@@ -90,7 +79,6 @@ export function mountRecipeEditor(root: HTMLElement, recipeId: 'new' | number): 
       }
       renderIngredients();
       modal.classList.add('hidden');
-      searchInput.value = '';
       session.setQuery('');
     });
 
@@ -150,56 +138,7 @@ export function mountRecipeEditor(root: HTMLElement, recipeId: 'new' | number): 
     void loadExistingRecipe();
   }
 
-  // Ingredient search
-  on(searchInput, 'input', () => {
-    session.setQuery(searchInput.value);
-  });
   session.setActive(true);
-
-  function appendIngredientResult(food: Food | ExternalFood, select: () => void) {
-    const detail = 'serving_size' in food ? {
-      serving: `${food.serving_size}${food.serving_unit}${savedMeasureSuffix(food.measures)}`,
-      carbs: food.carbs_g, protein: food.protein_g, fat: food.fat_g,
-    } : {
-      serving: `${food.servingSize}${food.servingUnit}${measureCountSuffix(food.measures?.length ?? 0)}`,
-      carbs: food.carbsG, protein: food.proteinG, fat: food.fatG,
-    };
-    const item = document.createElement('div');
-    item.className = 'food-item food-item-sm';
-    const info = document.createElement('div');
-    info.className = 'food-item-info';
-    const serving = textSpan('food-serving', `${detail.serving} · `);
-    serving.append(sourceLabel(food.source), document.createTextNode(` · ${Math.round(food.calories)} kcal`));
-    info.append(
-      textSpan('food-item-name', `${food.name}${food.brand ? ` (${food.brand})` : ''}`),
-      serving,
-    );
-    item.append(info, macroChips(detail));
-    on(item, 'click', select);
-    results.appendChild(item);
-  }
-
-  function renderIngredientResults({ foods, external }: FoodSearchResult) {
-    for (const food of foods) {
-      appendIngredientResult(food, () => showIngredientModal(food));
-    }
-
-    for (const ext of external) {
-      appendIngredientResult(ext, async () => {
-        try {
-          const { food } = await foodsApi.saveExternal(ext);
-          if (!isLive()) return;
-          showIngredientModal(food);
-        } catch {
-          if (isLive()) alert('Failed to save food');
-        }
-      });
-    }
-
-    if (foods.length === 0 && external.length === 0) {
-      results.innerHTML = '<p class="text-muted" style="padding:8px">No results</p>';
-    }
-  }
 
   // Form submit
   on(find('recipe-form'), 'submit', async (e) => {
