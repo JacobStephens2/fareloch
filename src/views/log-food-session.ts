@@ -3,6 +3,7 @@ import { navigate } from '../router';
 import { mountFoodSearch, renderSavedFoodList } from '../food-search-session';
 import { mountFoodQuantitySelection } from './food-quantity-selection';
 import { mountMacrosEntry } from './macros-entry';
+import { mountRecipeList } from './recipe-list-session';
 import type { Food, Recipe, MealType } from '../types';
 import { scaleMacros, roundMacros } from '../../server/src/nutrition';
 
@@ -22,6 +23,7 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
   let disposed = false;
   let quantitySelection: ReturnType<typeof mountFoodQuantitySelection> | undefined;
   let macrosEntry: ReturnType<typeof mountMacrosEntry> | undefined;
+  let disposeRecipeList: (() => void) | undefined;
   const events = new AbortController();
   const isLive = () => !disposed && root.isConnected;
   const find = <T extends HTMLElement = HTMLElement>(id: string) => root.querySelector<T>(`#${id}`)!;
@@ -181,6 +183,7 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
     foods: foodsApi,
     onSelect: showAddModal,
     onQueryInput: () => {
+      disposeRecipeList?.();
       ++tabRevision;
       activeTab = 'search';
       root.querySelector('.tab.active')?.classList.remove('active');
@@ -199,8 +202,16 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
       tab.classList.add('active');
       activeTab = (tab as HTMLElement).dataset.tab || 'search';
       const current = ++tabRevision;
+      disposeRecipeList?.();
       session.setActive(activeTab === 'search');
-      if (activeTab !== 'search') {
+      if (activeTab === 'recipes') {
+        const host = document.createElement('div');
+        host.className = 'food-list';
+        content.replaceChildren(host);
+        disposeRecipeList = mountRecipeList(host, {
+          kind: 'meal', read: recipesApi.list, onSelect: showRecipeAddModal,
+        });
+      } else if (activeTab !== 'search') {
         void loadTab(content, activeTab, () => isLive() && current === tabRevision);
       }
     });
@@ -245,24 +256,6 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
       return;
     }
 
-    if (tab === 'recipes') {
-      content.innerHTML = '<div class="loading-spinner">Loading...</div>';
-      try {
-        const { recipes } = await recipesApi.list();
-        if (!isCurrent()) return;
-        if (recipes.length === 0) {
-          content.innerHTML = '<p class="text-muted">No recipes yet. <a href="#/recipes">Create one</a></p>';
-          return;
-        }
-        content.innerHTML = '';
-        renderRecipeList(content, recipes);
-      } catch {
-        if (!isCurrent()) return;
-        content.innerHTML = '<p class="form-error">Failed to load recipes</p>';
-      }
-      return;
-    }
-
     if (tab === 'quick') {
       showQuickAddForm(content);
       return;
@@ -288,32 +281,6 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
       missing.append('No product found for barcode ', document.createTextNode(code));
       content.replaceChildren(missing);
     }
-  }
-
-  function renderRecipeList(container: HTMLElement, recipeList: Recipe[]) {
-    const list = document.createElement('div');
-    list.className = 'food-list';
-
-    for (const recipe of recipeList) {
-      const el = document.createElement('div');
-      el.className = 'food-item';
-      el.innerHTML = `
-        <div class="food-item-info">
-          <span class="food-item-name">${recipe.name}</span>
-          <span class="food-serving">${recipe.ingredientCount > 0 ? `${recipe.ingredientCount} ingredients` : 'Manual macros'} &middot; ${recipe.total_servings} ${recipe.serving_unit || 'serving'}${recipe.total_servings !== 1 ? 's' : ''}</span>
-        </div>
-        <div class="food-item-macros">
-          <span class="macro-chip chip-calories">${recipe.perServing.calories}</span>
-          <span class="macro-chip chip-carbs">${recipe.perServing.carbsG}c</span>
-          <span class="macro-chip chip-protein">${recipe.perServing.proteinG}p</span>
-          <span class="macro-chip chip-fat">${recipe.perServing.fatG}f</span>
-        </div>
-      `;
-      on(el, 'click', () => showRecipeAddModal(recipe));
-      list.appendChild(el);
-    }
-
-    container.appendChild(list);
   }
 
   function showAddModal(food: Food) {
@@ -538,6 +505,7 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
   return () => {
     if (disposed) return;
     disposed = true;
+    disposeRecipeList?.();
     macrosEntry?.dispose();
     quantitySelection?.dispose();
     ++tabRevision;
