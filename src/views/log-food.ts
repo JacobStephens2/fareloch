@@ -63,7 +63,7 @@ export function logFoodView() {
       </div>
     `,
     init: () => {
-      const root = document.querySelector<HTMLElement>('.log-page')!;
+      const root = document.getElementById('app')!.querySelector<HTMLElement>('.log-page')!;
       setCleanup(mountLogFood(root, date, mealType));
     },
   };

@@ -1,6 +1,7 @@
 import { recipes as recipesApi } from '../api';
 import { navigate, setCleanup } from '../router';
 import { mountRecipeEditor } from './recipe-editor-session';
+import { mountRecipeList } from './recipe-list-session';
 
 export function recipesView() {
   return {
@@ -16,49 +17,22 @@ export function recipesView() {
       </div>
     `,
     init: () => {
-      document.getElementById('new-recipe-btn')!.addEventListener('click', () => navigate('#/recipes/new'));
-      loadRecipes();
+      const root = document.getElementById('app')!.querySelector<HTMLElement>('.page')!;
+      const events = new AbortController();
+      const newRecipe = root.querySelector<HTMLElement>('#new-recipe-btn')!;
+      newRecipe.addEventListener('click', () => {
+        if (root.isConnected && root.contains(newRecipe)) navigate('#/recipes/new');
+      }, { signal: events.signal });
+      const disposeList = mountRecipeList(root.querySelector<HTMLElement>('#recipe-list')!, {
+        kind: 'manage', read: recipesApi.list,
+        onSelect: recipe => navigate(`#/recipes/${recipe.id}`),
+      });
+      setCleanup(() => {
+        events.abort();
+        disposeList();
+      });
     },
   };
-}
-
-async function loadRecipes() {
-  const container = document.getElementById('recipe-list')!;
-  try {
-    const { recipes } = await recipesApi.list();
-    if (recipes.length === 0) {
-      container.innerHTML = '<p class="text-muted">No recipes yet. Create one to save your favorite meals!</p>';
-      return;
-    }
-
-    container.innerHTML = '';
-    for (const recipe of recipes) {
-      const el = document.createElement('div');
-      el.className = 'food-item';
-      const servLabel = recipe.serving_unit && recipe.serving_unit !== 'serving'
-        ? `${recipe.total_servings} ${recipe.serving_unit}${recipe.total_servings !== 1 ? 's' : ''}`
-        : `${recipe.total_servings} serving${recipe.total_servings !== 1 ? 's' : ''}`;
-      const detail = recipe.manual_calories != null
-        ? `Manual macros &middot; ${servLabel}`
-        : `${recipe.ingredientCount} ingredient${recipe.ingredientCount !== 1 ? 's' : ''} &middot; ${servLabel}`;
-      el.innerHTML = `
-        <div class="food-item-info">
-          <span class="food-item-name">${recipe.name}</span>
-          <span class="food-serving">${detail}</span>
-        </div>
-        <div class="food-item-macros">
-          <span class="macro-chip chip-calories">${recipe.perServing.calories}</span>
-          <span class="macro-chip chip-carbs">${recipe.perServing.carbsG}c</span>
-          <span class="macro-chip chip-protein">${recipe.perServing.proteinG}p</span>
-          <span class="macro-chip chip-fat">${recipe.perServing.fatG}f</span>
-        </div>
-      `;
-      el.addEventListener('click', () => navigate(`#/recipes/${recipe.id}`));
-      container.appendChild(el);
-    }
-  } catch {
-    container.innerHTML = '<p class="form-error">Failed to load recipes</p>';
-  }
 }
 
 export function recipeEditView(params: Record<string, string>) {
