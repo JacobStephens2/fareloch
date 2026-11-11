@@ -97,6 +97,90 @@ async function seedOccurrences(sameFood: boolean) {
   return { id: recipe.id, first, second };
 }
 
+it.each(['Edit', 'Remove'])('retained row %s cannot act after Update replaces its list; fresh rows still save', async action => {
+  const { id, foodId } = await seedRecipe();
+  go(`/recipes/${id}`);
+  await vi.advanceTimersByTimeAsync(0);
+  const oldRow = document.querySelector<HTMLElement>('.ingredient-row')!;
+  click('.ingredient-clickable');
+  change('ing-qty', '2');
+  click('#ing-add-btn');
+  document.querySelector('#ingredients-list')!.append(oldRow);
+  const before = document.querySelector('.page')!.outerHTML;
+  oldRow.querySelector<HTMLElement>(action === 'Edit' ? '.ingredient-clickable' : '.btn-remove-ing')!.click();
+  expect(document.querySelector('.page')!.outerHTML).toBe(before);
+  oldRow.remove();
+  click('.ingredient-clickable');
+  change('ing-qty', '3');
+  click('#ing-add-btn');
+  submit();
+  await vi.advanceTimersByTimeAsync(0);
+  expect((await recipes.get(id)).ingredients).toEqual([
+    expect.objectContaining({ food_id: foodId, servings: 6, qty: 3 }),
+  ]);
+});
+
+it.each(['Add', 'row Remove', 'modal Remove'])(
+  '%s replaces its list without reviving old controls or changing search rules', async action => {
+    const { id, first } = await seedOccurrences(false);
+    const oldRow = document.querySelector<HTMLElement>('.ingredient-row')!;
+    change('ing-search', 'First apple');
+    await vi.advanceTimersByTimeAsync(400);
+    if (action === 'Add') {
+      click('#ing-results .food-item');
+      click('#ing-add-btn');
+    } else {
+      const secondRow = document.querySelectorAll('.ingredient-row')[1];
+      if (action === 'row Remove') secondRow.querySelector<HTMLElement>('.btn-remove-ing')!.click();
+      else {
+        secondRow.querySelector<HTMLElement>('.ingredient-clickable')!.click();
+        click('#ing-remove-btn');
+      }
+    }
+    expect(document.querySelector<HTMLInputElement>('#ing-search')!.value).toBe(action === 'Add' ? '' : 'First apple');
+    document.querySelector('#ingredients-list')!.append(oldRow);
+    const before = document.querySelector('.page')!.outerHTML;
+    oldRow.querySelector<HTMLElement>('.ingredient-clickable')!.click();
+    oldRow.querySelector<HTMLElement>('.btn-remove-ing')!.click();
+    expect(document.querySelector('.page')!.outerHTML).toBe(before);
+    oldRow.remove();
+    submit();
+    await vi.advanceTimersByTimeAsync(0);
+    const saved = (await recipes.get(id)).ingredients;
+    expect(saved).toHaveLength(action === 'Add' ? 3 : 1);
+    expect(saved[0]).toMatchObject({ food_id: first.id, servings: 1, qty: 1 });
+  },
+);
+
+it.each(['.ingredient-row', '.ingredient-clickable', '.ingredient-name', '.btn-remove-ing'])(
+  'same-turn %s removal/reconnection retires rows, preserving the open modal and parent controls', async departure => {
+    const { id, second } = await seedOccurrences(true);
+    const retained = [...document.querySelectorAll<HTMLElement>('.ingredient-clickable, .btn-remove-ing')];
+    document.querySelectorAll<HTMLElement>('.ingredient-clickable')[1].click();
+    const update = document.querySelector<HTMLElement>('#ing-add-btn')!;
+    departAndReconnect(document.querySelector('#ingredients-list')!, departure);
+    const before = document.querySelector('.page')!.outerHTML;
+    retained.forEach(control => control.click());
+    expect(document.querySelector('.page')!.outerHTML).toBe(before);
+    expect(document.querySelector('#ing-add-btn')).toBe(update);
+    change('ing-qty', '3');
+    update.click();
+    update.click();
+    expect([...document.querySelectorAll('.ingredient-unit')].map(node => node.textContent)).toEqual(['100g', '3x 100g']);
+    click('.btn-remove-ing');
+    click('.ingredient-clickable');
+    change('ing-qty', '4');
+    click('#ing-add-btn');
+    change('recipe-servings', '2');
+    expect(document.querySelector('#recipe-totals strong')!.textContent).toBe('200');
+    submit();
+    await vi.advanceTimersByTimeAsync(0);
+    expect((await recipes.get(id)).ingredients).toEqual([
+      expect.objectContaining({ food_id: second.id, servings: 4, qty: 4 }),
+    ]);
+  },
+);
+
 it('repeated ingredient Remove deletes one occurrence and preserves the other in guest storage', async () => {
   const { id, second } = await seedOccurrences(false);
   click('.ingredient-clickable');
@@ -268,7 +352,7 @@ it('signed-in HTTP adapters preserve update and external-selection inputs across
 });
 
 it.each((['create', 'update'] as const).flatMap(action =>
-  (['close', 'replacement', 'parent'] as const).map(retirement => ({ action, retirement }))))(
+  (['close', 'replacement', 'list replacement', 'list departure', 'parent'] as const).map(retirement => ({ action, retirement }))))(
   'accepted HTTP $action retains ingredient inputs after $retirement retirement', async ({ action, retirement }) => {
     const { id, foodId } = await seedRecipe();
     const existing = await recipes.get(id);
@@ -301,6 +385,8 @@ it.each((['create', 'update'] as const).flatMap(action =>
     change('ing-qty', '9');
     if (retirement === 'close') click('#ing-modal-close');
     else if (retirement === 'replacement') click('.ingredient-clickable');
+    else if (retirement === 'list replacement') click('#ing-add-btn');
+    else if (retirement === 'list departure') departAndReconnect(document.querySelector('#ingredients-list')!, '.ingredient-row');
     else departAndReconnect(document.querySelector('.page')!, 'ancestor');
     const before = document.querySelector('.page')!.outerHTML;
     pending.resolve(Response.json({ recipe: { id: 90 }, success: true }));
@@ -319,6 +405,46 @@ it.each((['create', 'update'] as const).flatMap(action =>
     });
     expect(window.location.hash).toBe(retirement === 'parent'
       ? action === 'create' ? '#/recipes/new' : `#/recipes/${id}` : '#/recipes');
+    if (retirement === 'parent') expect(document.querySelector('.page')!.outerHTML).toBe(before);
+  },
+);
+
+it.each((['create', 'update'] as const).flatMap(action =>
+  (['list replacement', 'list departure', 'parent'] as const).map(retirement => ({ action, retirement }))))(
+  'accepted guest $action saves captured ingredients after $retirement retirement', async ({ action, retirement }) => {
+    const { id, foodId } = await seedRecipe();
+    const pending = deferred<void>();
+    const operation = recipes[action];
+    // Delay the real guest adapter so the draft can change before persistence finishes.
+    vi.spyOn(recipes, action).mockImplementation(async (...args: unknown[]) => {
+      await pending.promise;
+      return Reflect.apply(operation, recipes, args);
+    });
+    go(action === 'create' ? '/recipes/new' : `/recipes/${id}`);
+    await vi.advanceTimersByTimeAsync(0);
+    if (action === 'create') {
+      change('ing-search', 'apple');
+      await vi.advanceTimersByTimeAsync(400);
+      click('#ing-results .food-item');
+    } else click('.ingredient-clickable');
+    change('ing-qty', '3');
+    click('#ing-add-btn');
+    change('recipe-name', 'Captured guest ingredients');
+    submit();
+    click('.ingredient-clickable');
+    change('ing-qty', '9');
+    click('#ing-add-btn');
+    if (retirement === 'list departure') departAndReconnect(document.querySelector('#ingredients-list')!, '.ingredient-row');
+    else if (retirement === 'parent') departAndReconnect(document.querySelector('.page')!, 'ancestor');
+    const before = document.querySelector('.page')!.outerHTML;
+    const origin = window.location.hash;
+    pending.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    const savedRecipe = (await recipes.list()).recipes.find(value => value.name === 'Captured guest ingredients')!;
+    expect((await recipes.get(savedRecipe.id)).ingredients).toEqual([
+      expect.objectContaining({ food_id: foodId, servings: action === 'create' ? 3 : 6, qty: 3, unit_label: '3x 100g' }),
+    ]);
+    expect(window.location.hash).toBe(retirement === 'parent' ? origin : '#/recipes');
     if (retirement === 'parent') expect(document.querySelector('.page')!.outerHTML).toBe(before);
   },
 );
