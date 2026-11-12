@@ -4,7 +4,7 @@ import { auth, weight } from '../api';
 import { getGuestUser } from '../local-db';
 import * as router from '../router';
 import { deferred } from '../test/food-search-fixtures';
-import { beginWeightOperation, go, input, reading, ResizeObserverStub, startWeightRoutes, submit, type WeightOperation } from '../test/weight-fixtures';
+import { beginWeightOperation, go, input, reading, ResizeObserverStub, startWeightRoutes, submit, submitReading, type WeightOperation } from '../test/weight-fixtures';
 
 const settle = () => vi.advanceTimersByTimeAsync(0);
 
@@ -173,7 +173,7 @@ it.each(writeCases)('$operation $outcome cannot publish across $destination and 
   expect(auth.me).not.toHaveBeenCalled();
 });
 
-it.each(['route departure', 'disconnected root', 'history refresh'] as const)('retained controls cannot issue operations after %s', async departure => {
+it.each(['route departure', 'disconnected root'] as const)('retained controls cannot issue operations after %s', async departure => {
   go('/weight');
   await settle();
   const root = document.querySelector('.page')!;
@@ -181,11 +181,7 @@ it.each(['route departure', 'disconnected root', 'history refresh'] as const)('r
   input('weight-lbs', '180');
   input('waist-ceiling', '32');
   if (departure === 'route departure') go('/other');
-  else if (departure === 'disconnected root') root.remove();
-  else {
-    submit('waist-ceiling-form');
-    await settle();
-  }
+  else root.remove();
   // Observer retirement now releases the chart, restoring canvas attributes.
   await Promise.resolve();
   vi.mocked(weight.log).mockClear();
@@ -193,10 +189,8 @@ it.each(['route departure', 'disconnected root', 'history refresh'] as const)('r
   vi.mocked(weight.delete).mockClear();
   vi.mocked(window.confirm).mockClear();
   const html = root.innerHTML;
-  if (departure !== 'history refresh') {
-    submit('weight-form', root);
-    submit('waist-ceiling-form', root);
-  }
+  submit('weight-form', root);
+  submit('waist-ceiling-form', root);
   oldDelete.click();
   await settle();
   expect(weight.log).not.toHaveBeenCalled();
@@ -238,7 +232,7 @@ it('disposes before the next view initializes and repeated cleanup leaves the su
   expect(document.querySelector('#weight-trend-value')!.textContent).toBe('180.0 lbs');
 });
 
-it.each(['log', 'ceiling', 'delete'] as const)('%s preserves live failure, retry and success feedback', async operation => {
+it.each(['log', 'ceiling'] as const)('%s preserves live failure, retry and success feedback', async operation => {
   go('/weight');
   await settle();
   const pending = delayOperation(operation);
@@ -249,17 +243,14 @@ it.each(['log', 'ceiling', 'delete'] as const)('%s preserves live failure, retry
     expect(window.alert).toHaveBeenCalledWith('Failed to log weight');
     expect(document.querySelector<HTMLInputElement>('#weight-lbs')!.value).toBe('180');
     expect(document.querySelector<HTMLInputElement>('#weight-waist')!.value).toBe('31.2');
-  } else if (operation === 'ceiling') {
+  } else {
     expect(document.querySelector('#waist-ceiling-message')!.textContent).toBe('Failed to save waist ceiling.');
     expect(document.querySelector<HTMLInputElement>('#waist-ceiling')!.value).toBe('31.25');
-    expect(window.alert).not.toHaveBeenCalled();
-  } else {
-    expect(document.querySelectorAll('.weight-entry')).toHaveLength(1);
     expect(window.alert).not.toHaveBeenCalled();
   }
   expect(document.querySelector<HTMLButtonElement>('#weight-form button')!.disabled).toBe(false);
   expect(document.querySelector<HTMLButtonElement>('#waist-ceiling-form button')!.disabled).toBe(false);
-  vi.mocked(weight.list).mockResolvedValue({ logs: operation === 'delete' ? [] : [reading(180)] });
+  vi.mocked(weight.list).mockResolvedValue({ logs: [reading(180)] });
   vi.mocked(auth.me).mockResolvedValue({ user: { ...getGuestUser(), targetWaistInches: 31.25 } });
   begin(operation);
   await settle();
@@ -268,7 +259,7 @@ it.each(['log', 'ceiling', 'delete'] as const)('%s preserves live failure, retry
     expect(document.querySelector<HTMLInputElement>('#weight-lbs')!.value).toBe('');
     expect(document.querySelector<HTMLInputElement>('#weight-waist')!.value).toBe('');
   }
-  expect(document.querySelector('#weight-trend-value')!.textContent).toBe(operation === 'delete' ? 'No logs yet' : '180.0 lbs');
+  expect(document.querySelector('#weight-trend-value')!.textContent).toBe('180.0 lbs');
   expect(document.querySelector<HTMLButtonElement>('#weight-form button')!.disabled).toBe(false);
   expect(document.querySelector<HTMLButtonElement>('#waist-ceiling-form button')!.disabled).toBe(false);
 });
@@ -322,4 +313,48 @@ it('publishes no part of a superseded or incomplete combined snapshot', async ()
   expect(document.querySelector('#weight-trend-value')!.textContent).toBe('180.0 lbs');
   expect(document.querySelector<HTMLInputElement>('#waist-ceiling')!.value).toBe('32');
   expect(document.querySelector('#waist-summary')!.textContent).toContain('At or below ceiling (32")');
+});
+
+it.each(['success', 'failure'] as const)('pending and stale %s reads leave the current history actionable', async outcome => {
+  go('/weight');
+  await settle();
+  const pending = deferred<Awaited<ReturnType<typeof weight.list>>>();
+  vi.mocked(weight.list).mockReturnValueOnce(pending.promise);
+  submit('waist-ceiling-form');
+  await settle();
+  const oldButton = document.querySelector<HTMLButtonElement>('.btn-delete-weight')!;
+  // Starting a refresh must not revoke the currently displayed rows.
+  oldButton.click();
+  expect(weight.delete).toHaveBeenCalledExactlyOnceWith(7);
+  await settle();
+  const currentButton = document.querySelector<HTMLButtonElement>('.btn-delete-weight')!;
+  expect(currentButton).not.toBe(oldButton);
+  const chart = Chart.getChart(document.querySelector<HTMLCanvasElement>('canvas')!);
+  if (outcome === 'success') pending.resolve({ logs: [] });
+  else pending.reject(new Error('Stale read'));
+  await settle();
+  expect(document.querySelector('.btn-delete-weight')).toBe(currentButton);
+  expect(Chart.getChart(document.querySelector<HTMLCanvasElement>('canvas')!)).toBe(chart);
+  currentButton.click();
+  expect(weight.delete).toHaveBeenCalledTimes(2);
+});
+
+it.each(['success', 'failure'] as const)('accepted current load %s retires reconnected old rows without retiring the Weight parent', async outcome => {
+  go('/weight');
+  await settle();
+  const row = document.querySelector('.weight-entry')!;
+  const retained = row.querySelector<HTMLButtonElement>('button')!;
+  if (outcome === 'failure') vi.mocked(weight.list).mockRejectedValueOnce(new Error('Load failed'));
+  else vi.mocked(weight.list).mockResolvedValueOnce({ logs: [reading(180, 9)] });
+  submit('waist-ceiling-form');
+  await settle();
+  if (outcome === 'failure') expect(document.querySelector('#weight-history .form-error')!.textContent).toBe('Failed to load weight data');
+  document.querySelector('#weight-history')!.append(row);
+  retained.click();
+  expect(window.confirm).not.toHaveBeenCalled();
+  expect(weight.delete).not.toHaveBeenCalled();
+  submitReading();
+  await settle();
+  expect(document.querySelector('#weight-trend-value')!.textContent).toBe('165.0 lbs');
+  expect(Chart.getChart(document.querySelector<HTMLCanvasElement>('canvas')!)).toBeDefined();
 });
