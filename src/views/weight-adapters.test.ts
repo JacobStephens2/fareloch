@@ -334,3 +334,129 @@ it.each(httpReadCases)('signed-in late $path $outcome cannot replace the remount
   expect(Chart.getChart(canvas)).toBe(chart);
   expect(window.alert).not.toHaveBeenCalled();
 });
+
+it.each(['persistence', 'result delivery'] as const)('guest delete refreshes its live parent after history replacement with delayed %s', async timing => {
+  await weight.log({ date: '2026-11-04', weightLbs: 165 });
+  go('/weight');
+  await settle();
+  const root = document.querySelector('.page')!;
+  const retained = root.querySelector<HTMLButtonElement>('.btn-delete-weight')!;
+  const delivery = deferred<void>();
+  const remove = localWeight.delete;
+  vi.spyOn(localWeight, 'delete').mockImplementationOnce(async id => {
+    if (timing === 'persistence') await delivery.promise;
+    const result = await remove(id);
+    if (timing === 'result delivery') await delivery.promise;
+    return result;
+  });
+  retained.click();
+  await settle();
+  input('waist-ceiling', '32');
+  submit('waist-ceiling-form');
+  await settle();
+  expect(document.querySelector('.page')).toBe(root);
+  expect(root.querySelector('.btn-delete-weight')).not.toBe(retained);
+  expect(root.querySelector<HTMLInputElement>('#waist-ceiling')!.value).toBe('32');
+  // Make the rendered successor stale even when persistence preceded replacement.
+  await weight.log({ date: '2026-11-05', weightLbs: 180 });
+  const oldChart = Chart.getChart(root.querySelector<HTMLCanvasElement>('canvas')!);
+  retained.click();
+  expect(window.confirm).toHaveBeenCalledTimes(1);
+  delivery.resolve();
+  await settle();
+  expect(root.querySelectorAll('.weight-entry')).toHaveLength(1);
+  expect(root.querySelector('.weight-entry')!.textContent).toContain('180 lbs');
+  expect(root.querySelector('#weight-trend-value')!.textContent).toBe('180.0 lbs');
+  expect(Chart.getChart(root.querySelector<HTMLCanvasElement>('canvas')!)).not.toBe(oldChart);
+  expect((await weight.list()).logs.map(log => log.weight_lbs)).toEqual([180]);
+  expect(window.alert).not.toHaveBeenCalled();
+});
+
+it.each(['live parent', 'retired parent'] as const)('signed-in delayed delete success after history replacement refreshes only a %s', async owner => {
+  setGuestMode(false);
+  setToken('weight-delete-token');
+  const delivery = deferred<Response>();
+  let logs = [reading()];
+  let targetWaistInches: number | null = null;
+  const requests: string[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (url: string, options?: RequestInit) => {
+    const path = url.replace('/api', '');
+    const method = options?.method ?? 'GET';
+    requests.push(`${method} ${path}`);
+    if (method === 'DELETE' && path === '/weight/7') return delivery.promise;
+    if (method === 'PUT' && path === '/auth/me') {
+      targetWaistInches = 32;
+      return Response.json({ user: { ...getGuestUser(), targetWaistInches } });
+    }
+    if (method === 'GET' && path === '/weight?limit=90') return Response.json({ logs });
+    if (method === 'GET' && path === '/auth/me') return Response.json({ user: { ...getGuestUser(), targetWaistInches } });
+    throw new Error(`Unexpected request: ${method} ${path}`);
+  }));
+  go('/weight');
+  await settle();
+  const root = document.querySelector('.page')!;
+  const retained = root.querySelector<HTMLButtonElement>('.btn-delete-weight')!;
+  retained.click();
+  input('waist-ceiling', '32');
+  submit('waist-ceiling-form');
+  await settle();
+  expect(root.querySelector('.btn-delete-weight')).not.toBe(retained);
+  expect(root.querySelector('.weight-entry')!.textContent).toContain('165 lbs');
+  if (owner === 'retired parent') {
+    go('/weight');
+    await settle();
+    input('waist-ceiling', '33');
+  }
+  const before = root.innerHTML;
+  const successor = document.querySelector('#app')!.innerHTML;
+  const canvas = document.querySelector<HTMLCanvasElement>('canvas')!;
+  const chart = Chart.getChart(canvas);
+  const reads = requests.length;
+  logs = [];
+  delivery.resolve(Response.json({ success: true }));
+  await settle();
+  expect(requests.filter(request => request === 'DELETE /weight/7')).toHaveLength(1);
+  if (owner === 'live parent') {
+    expect(requests.slice(reads)).toEqual(['GET /weight?limit=90', 'GET /auth/me']);
+    expect(root.querySelectorAll('.weight-entry')).toHaveLength(0);
+    expect(root.querySelector('#weight-trend-value')!.textContent).toBe('No logs yet');
+    expect(Chart.getChart(canvas)).not.toBe(chart);
+  } else {
+    expect(requests).toHaveLength(reads);
+    expect(root.innerHTML).toBe(before);
+    expect(document.querySelector('#app')!.innerHTML).toBe(successor);
+    expect(document.querySelector<HTMLInputElement>('#waist-ceiling')!.value).toBe('33');
+    expect(Chart.getChart(canvas)).toBe(chart);
+  }
+  expect(window.alert).not.toHaveBeenCalled();
+});
+
+it.each([false, true])('guest delayed delete stays persisted and silent after same-parent replacement and ancestor retirement (observer delivered: %s)', async delivered => {
+  await weight.log({ date: '2026-11-04', weightLbs: 165 });
+  go('/weight');
+  await settle();
+  const delivery = deferred<void>();
+  const remove = localWeight.delete;
+  vi.spyOn(localWeight, 'delete').mockImplementationOnce(async id => {
+    const result = await remove(id);
+    await delivery.promise;
+    return result;
+  });
+  const root = document.querySelector('.page')!;
+  root.querySelector<HTMLButtonElement>('.btn-delete-weight')!.click();
+  await settle();
+  submit('waist-ceiling-form');
+  await settle();
+  expect(root.querySelectorAll('.weight-entry')).toHaveLength(0);
+  departAndReconnect(root, 'ancestor');
+  if (delivered) await Promise.resolve();
+  const before = presentation(root);
+  const reads = vi.spyOn(Storage.prototype, 'getItem');
+  delivery.resolve();
+  await settle();
+  expect(reads.mock.calls.filter(([key]) => key === 'guest_weight' || key === 'guest_user')).toHaveLength(0);
+  expect(presentation(root)).toBe(before);
+  expect(Chart.getChart(root.querySelector<HTMLCanvasElement>('canvas')!)).toBeUndefined();
+  expect((await weight.list()).logs).toEqual([]);
+  expect(window.alert).not.toHaveBeenCalled();
+});

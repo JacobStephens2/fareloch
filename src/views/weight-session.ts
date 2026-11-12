@@ -1,6 +1,7 @@
 import { auth, weight as weightApi } from '../api';
 import type { WeightLog } from '../types';
 import { createMountedLifetime } from '../mounted-lifetime';
+import { mountWeightHistorySession } from './weight-history-session';
 import { calculateWeightTrend } from '../../server/src/weight-trend';
 import { Chart, LineController, LineElement, PointElement, LinearScale, Tooltip, Filler, Legend } from 'chart.js';
 
@@ -9,6 +10,7 @@ Chart.register(LineController, LineElement, PointElement, LinearScale, Tooltip, 
 export function mountWeight(root: HTMLElement): () => void {
   let refreshRevision = 0;
   let chartInstance: Chart | null = null;
+  let disposeHistory: (() => void) | undefined;
   const find = <T extends HTMLElement = HTMLElement>(id: string) => root.querySelector<T>(`#${id}`)!;
   const lifetime = createMountedLifetime(root, {
     ownedNodes: [...root.querySelectorAll(`
@@ -20,6 +22,7 @@ export function mountWeight(root: HTMLElement): () => void {
     `)],
     cleanup: () => {
       ++refreshRevision;
+      disposeHistory?.();
       const chart = chartInstance;
       chartInstance = null;
       chart?.destroy();
@@ -91,9 +94,14 @@ export function mountWeight(root: HTMLElement): () => void {
       const ceiling = find('waist-ceiling') as HTMLInputElement | null;
       if (ceiling) ceiling.value = user.targetWaistInches?.toString() ?? '';
       renderChart(logs, user.targetWaistInches);
-      renderHistory(logs);
+      disposeHistory?.();
+      disposeHistory = mountWeightHistorySession(find('weight-history'), {
+        logs, isParentLive: isLive,
+        onDeleteSuccess: () => { void loadWeightData(); },
+      });
     } catch {
       if (!isLive() || revision !== refreshRevision) return;
+      disposeHistory?.();
       const container = find('weight-history');
       if (container) container.innerHTML = '<p class="form-error">Failed to load weight data</p>';
     }
@@ -212,43 +220,4 @@ export function mountWeight(root: HTMLElement): () => void {
     summary.hidden = summary.textContent === '';
   }
 
-  function renderHistory(logs: WeightLog[]) {
-    const container = find('weight-history');
-    if (!container) return;
-
-    if (logs.length === 0) {
-      container.innerHTML = '<p class="text-muted">No weight entries yet. Log your first one above!</p>';
-      return;
-    }
-
-    let html = '<h3>Recent Entries</h3>';
-    for (const log of logs.slice(0, 14)) {
-      const d = new Date(log.date + 'T12:00:00');
-      const dateStr = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-      const timeStr = log.time ? ` at ${log.time}` : '';
-      html += `
-        <div class="weight-entry">
-          <span class="weight-date">${dateStr}${timeStr}</span>
-          <span class="weight-value">${log.weight_lbs} lbs${log.waist_inches != null ? ` <span class="weight-waist">Waist ${log.waist_inches}&quot;</span>` : ''}</span>
-          <button class="btn-icon btn-delete-weight" data-id="${log.id}">&times;</button>
-        </div>
-      `;
-    }
-    container.innerHTML = html;
-
-    container.querySelectorAll('.btn-delete-weight').forEach((btn) => {
-      on(btn, 'click', async () => {
-        const id = parseInt((btn as HTMLElement).dataset.id || '0');
-        if (id && confirm('Delete this entry?')) {
-          try {
-            await weightApi.delete(id);
-            if (!isLive()) return;
-            await loadWeightData();
-          } catch {
-            // Ignore
-          }
-        }
-      });
-    });
-  }
 }
