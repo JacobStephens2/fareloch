@@ -218,9 +218,10 @@ function recipeCollections(recipes: unknown, ingredients: unknown) {
     if (!isIdentity(recipeId) || String(recipeId) !== key || !Array.isArray(occurrences)) invalidRecipeState();
     greatestId = Math.max(greatestId, recipeId);
     for (const occurrence of occurrences) {
-      if (!isRecord(occurrence) || !isIdentity(occurrence.food_id) || typeof occurrence.name !== 'string') invalidRecipeState();
+      if (!isRecord(occurrence) || typeof occurrence.name !== 'string') invalidRecipeState();
       retainIdentity(occurrence.id);
-      numericFields(occurrence, ['servings', 'qty', 'serving_size', 'calories', 'carbs_g', 'protein_g', 'fat_g']);
+      // Food references retain the existing missing-Food fallback, including food_id 0.
+      numericFields(occurrence, ['food_id', 'servings', 'qty', 'serving_size', 'calories', 'carbs_g', 'protein_g', 'fat_g']);
       stringFields(occurrence, ['unit_label', 'brand', 'serving_unit', 'measures']);
     }
   }
