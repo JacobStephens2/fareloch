@@ -7,7 +7,7 @@ import type { User } from '../types';
 import { deferred } from '../test/food-search-fixtures';
 import { departAndReconnect } from '../test/mounted-lifetime-fixtures';
 import { settingsView } from './settings';
-import { mountSettingsForms } from './settings-form-session';
+import { mountSettingsSession } from './settings-session';
 
 const settle = () => vi.advanceTimersByTimeAsync(0);
 let disposeForms: (() => void) | undefined;
@@ -149,7 +149,7 @@ it('initially disconnected Settings forms stay retired and a fresh mount works',
   const holder = document.createElement('div');
   holder.innerHTML = settingsView().html;
   const root = holder.querySelector<HTMLElement>('.page')!;
-  disposeForms = mountSettingsForms(root);
+  disposeForms = mountSettingsSession(root, false);
   document.querySelector('#app')!.append(root);
   for (const flow of flows) begin(flow, root);
   submit('password-form', root);
@@ -393,7 +393,7 @@ it.each(['disposed', 'disconnected', 'route departure'] as const)('retained cont
   if (lifetime === 'disposed') {
     document.querySelector('#app')!.innerHTML = settingsView().html;
     root = document.querySelector<HTMLElement>('.page')!;
-    disposeForms = mountSettingsForms(root);
+    disposeForms = mountSettingsSession(root, false);
     disposeForms();
     disposeForms();
     expect(root.isConnected).toBe(true);
