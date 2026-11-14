@@ -1,27 +1,8 @@
-import { auth, API_BASE, getToken } from '../api';
-import { state, setState } from '../state';
-import { navigate, setCleanup } from '../router';
-import { isGuestMode, clearGuestData } from '../local-db';
-import { getTheme, setTheme, type ThemePref } from '../theme';
-import { mountSettingsForms } from './settings-form-session';
-
-async function downloadCsv(path: string, filename: string) {
-  const token = getToken();
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-    credentials: 'include',
-  });
-  if (!res.ok) throw new Error('Download failed');
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}
+import { state } from '../state';
+import { setCleanup } from '../router';
+import { isGuestMode } from '../local-db';
+import { getTheme } from '../theme';
+import { mountSettingsSession } from './settings-session';
 
 export function settingsView() {
   const user = state.user!;
@@ -191,50 +172,7 @@ export function settingsView() {
     `,
     init: () => {
       const root = document.getElementById('app')!.querySelector<HTMLElement>('.page')!;
-      setCleanup(mountSettingsForms(root));
-
-      // Theme toggle
-      document.querySelectorAll('.theme-option').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const pref = (btn as HTMLElement).dataset.theme as ThemePref;
-          setTheme(pref);
-          document.querySelectorAll('.theme-option').forEach((b) => {
-            const active = (b as HTMLElement).dataset.theme === pref;
-            b.classList.toggle('active', active);
-            b.setAttribute('aria-checked', String(active));
-          });
-        });
-      });
-
-      if (!guest) {
-        // Export buttons
-        document.getElementById('export-meals-btn')!.addEventListener('click', async () => {
-          try {
-            await downloadCsv('/meals/export/csv', 'meals.csv');
-          } catch (err: any) {
-            alert(err.message);
-          }
-        });
-        document.getElementById('export-weight-btn')!.addEventListener('click', async () => {
-          try {
-            await downloadCsv('/weight/export/csv', 'weight.csv');
-          } catch (err: any) {
-            alert(err.message);
-          }
-        });
-      }
-
-      // Logout
-      document.getElementById('logout-btn')!.addEventListener('click', async () => {
-        if (guest) {
-          if (!confirm('This will clear all your guest data. Continue?')) return;
-          clearGuestData();
-        } else {
-          await auth.logout();
-        }
-        setState({ user: null });
-        navigate('#/login');
-      });
+      setCleanup(mountSettingsSession(root, guest));
     },
   };
 }
