@@ -32,6 +32,9 @@ See [FARELOCH-NAME.md](./FARELOCH-NAME.md) for the rename decision record.
 
 ## Development
 
+Use Node.js 22 or 26. CI installs, typechecks, tests and builds both packages on
+both versions, then starts the compiled API and checks `/api/health`.
+
 ```bash
 # Frontend
 npm install
@@ -43,6 +46,11 @@ npm install
 npx tsc              # Compile TypeScript
 node dist/index.js   # Runs on :3457
 ```
+
+From the repository root, run `npm --prefix server run build` followed by
+`npm run test:server-start` to check startup with a temporary database and a
+test JWT secret. The check fails on startup deprecation warnings and removes
+its temporary data when it finishes.
 
 ### Launcher icons
 

@@ -4,11 +4,15 @@
   "private": true,
   "version": "1.4.1",
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "vite",
     "test": "vitest run",
     "test:dashboard-summary": "node scripts/test-dashboard-summary.mjs",
     "test:android-upgrade": "node scripts/test-android-upgrade.mjs",
+    "test:server-start": "node scripts/test-server-start.mjs",
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json && vite build",
     "build:android": "VITE_API_BASE=https://fareloch.app/api npm run build -- --mode android && npx cap sync android",
