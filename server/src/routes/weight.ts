@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { getDb } from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
 import { isWaistInches } from '../waist.js';
+import { saveWeight } from '../weight-mutations.js';
 
 const router = Router();
 
@@ -23,7 +24,6 @@ router.post('/', requireAuth, (req: Request, res: Response) => {
   try {
     const db = getDb();
     const { date, weightLbs, notes, time, waistInches } = req.body;
-    const timeVal = time || '';
     if (!date || !weightLbs) {
       res.status(400).json({ error: 'Date and weight are required' });
       return;
@@ -33,23 +33,8 @@ router.post('/', requireAuth, (req: Request, res: Response) => {
       return;
     }
 
-    // Upsert: if there's already a log for this date+time, update it
-    const existing = db.prepare('SELECT id FROM weight_logs WHERE user_id = ? AND date = ? AND time = ?').get(req.user!.userId, date, timeVal) as any;
-
-    if (existing) {
-      db.prepare('UPDATE weight_logs SET weight_lbs = ?, waist_inches = ?, notes = ? WHERE id = ?').run(weightLbs, waistInches ?? null, notes || null, existing.id);
-      const log = db.prepare('SELECT * FROM weight_logs WHERE id = ?').get(existing.id);
-      res.json({ log });
-    } else {
-      const result = db.prepare('INSERT INTO weight_logs (user_id, date, time, weight_lbs, waist_inches, notes) VALUES (?, ?, ?, ?, ?, ?)').run(
-        req.user!.userId, date, timeVal, weightLbs, waistInches ?? null, notes || null
-      );
-      const log = db.prepare('SELECT * FROM weight_logs WHERE id = ?').get(result.lastInsertRowid);
-      res.json({ log });
-    }
-
-    // Update user's current weight
-    db.prepare('UPDATE users SET current_weight_lbs = ? WHERE id = ?').run(weightLbs, req.user!.userId);
+    const log = saveWeight(db, req.user!.userId, { date, weightLbs, notes, time, waistInches });
+    res.json({ log });
   } catch (e) {
     console.error('Log weight error:', e);
     res.status(500).json({ error: 'Failed to log weight' });
