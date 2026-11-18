@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import nodemailer from 'nodemailer';
 import { getDb } from '../db.js';
 import { signToken, setTokenCookie, requireAuth } from '../middleware/auth.js';
-import { isWaistInches } from '../waist.js';
+import { readProfile, updateProfile } from '../profile.js';
 
 const router = Router();
 
@@ -86,9 +86,11 @@ router.post('/register', async (req: Request, res: Response) => {
       console.error('Failed to send admin notification:', e);
     }
 
+    const profile = readProfile(db, userId);
+    if (!profile) throw new Error('User not found');
     const token = signToken({ userId, email: email.toLowerCase().trim(), firstName: firstName.trim() });
     setTokenCookie(res, token);
-    res.json({ user: { id: userId, email, firstName, emailVerified: false, targetWaistInches: null }, token });
+    res.json({ user: profile, token });
   } catch (e) {
     console.error('Register error:', e);
     res.status(500).json({ error: 'Registration failed' });
@@ -105,7 +107,8 @@ router.post('/login', async (req: Request, res: Response) => {
     }
 
     const db = getDb();
-    const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email.toLowerCase().trim()) as any;
+    const user = db.prepare('SELECT id, email, first_name, password_hash FROM users WHERE email = ?')
+      .get(email.toLowerCase().trim()) as any;
     if (!user) {
       res.status(401).json({ error: 'Invalid email or password' });
       return;
@@ -117,26 +120,12 @@ router.post('/login', async (req: Request, res: Response) => {
       return;
     }
 
+    const profile = readProfile(db, user.id);
+    if (!profile) throw new Error('User not found');
     const token = signToken({ userId: user.id, email: user.email, firstName: user.first_name });
     setTokenCookie(res, token);
     res.json({
-      user: {
-        id: user.id,
-        email: user.email,
-        firstName: user.first_name,
-        emailVerified: !!user.email_verified,
-        heightInches: user.height_inches,
-        currentWeightLbs: user.current_weight_lbs,
-        targetWaistInches: user.target_waist_inches,
-        targetCalories: user.target_calories,
-        targetCarbsG: user.target_carbs_g,
-        targetProteinG: user.target_protein_g,
-        targetFatG: user.target_fat_g,
-        workoutTargetCalories: user.workout_target_calories,
-        workoutTargetCarbsG: user.workout_target_carbs_g,
-        workoutTargetProteinG: user.workout_target_protein_g,
-        workoutTargetFatG: user.workout_target_fat_g,
-      },
+      user: profile,
       token,
     });
   } catch (e) {
@@ -148,84 +137,28 @@ router.post('/login', async (req: Request, res: Response) => {
 // Get current user
 router.get('/me', requireAuth, (req: Request, res: Response) => {
   const db = getDb();
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.userId) as any;
+  const user = readProfile(db, req.user!.userId);
   if (!user) {
     res.status(404).json({ error: 'User not found' });
     return;
   }
-  res.json({
-    user: {
-      id: user.id,
-      email: user.email,
-      firstName: user.first_name,
-      emailVerified: !!user.email_verified,
-      heightInches: user.height_inches,
-      currentWeightLbs: user.current_weight_lbs,
-      targetWaistInches: user.target_waist_inches,
-      targetCalories: user.target_calories,
-      targetCarbsG: user.target_carbs_g,
-      targetProteinG: user.target_protein_g,
-      targetFatG: user.target_fat_g,
-    },
-  });
+  res.json({ user });
 });
 
 // Update profile
 router.put('/me', requireAuth, async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const {
-      firstName, heightInches, currentWeightLbs, targetWaistInches,
-      targetCalories, targetCarbsG, targetProteinG, targetFatG,
-      workoutTargetCalories, workoutTargetCarbsG, workoutTargetProteinG, workoutTargetFatG,
-    } = req.body;
-    if (targetWaistInches != null && !isWaistInches(targetWaistInches)) {
+    const result = updateProfile(db, req.user!.userId, req.body);
+    if (result.kind === 'invalid-waist') {
       res.status(400).json({ error: 'Waist ceiling must be a number between 20 and 60 inches' });
       return;
     }
-    db.prepare(`
-      UPDATE users SET
-        first_name = COALESCE(?, first_name),
-        height_inches = COALESCE(?, height_inches),
-        current_weight_lbs = COALESCE(?, current_weight_lbs),
-        target_waist_inches = CASE WHEN ? THEN ? ELSE target_waist_inches END,
-        target_calories = COALESCE(?, target_calories),
-        target_carbs_g = COALESCE(?, target_carbs_g),
-        target_protein_g = COALESCE(?, target_protein_g),
-        target_fat_g = COALESCE(?, target_fat_g),
-        workout_target_calories = COALESCE(?, workout_target_calories),
-        workout_target_carbs_g = COALESCE(?, workout_target_carbs_g),
-        workout_target_protein_g = COALESCE(?, workout_target_protein_g),
-        workout_target_fat_g = COALESCE(?, workout_target_fat_g)
-      WHERE id = ?
-    `).run(
-      firstName, heightInches, currentWeightLbs,
-      targetWaistInches !== undefined ? 1 : 0, targetWaistInches ?? null,
-      targetCalories, targetCarbsG, targetProteinG, targetFatG,
-      workoutTargetCalories, workoutTargetCarbsG, workoutTargetProteinG, workoutTargetFatG,
-      req.user!.userId
-    );
-
-    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.userId) as any;
-    res.json({
-      user: {
-        id: user.id,
-        email: user.email,
-        firstName: user.first_name,
-        emailVerified: !!user.email_verified,
-        heightInches: user.height_inches,
-        currentWeightLbs: user.current_weight_lbs,
-        targetWaistInches: user.target_waist_inches,
-        targetCalories: user.target_calories,
-        targetCarbsG: user.target_carbs_g,
-        targetProteinG: user.target_protein_g,
-        targetFatG: user.target_fat_g,
-        workoutTargetCalories: user.workout_target_calories,
-        workoutTargetCarbsG: user.workout_target_carbs_g,
-        workoutTargetProteinG: user.workout_target_protein_g,
-        workoutTargetFatG: user.workout_target_fat_g,
-      },
-    });
+    if (result.kind === 'missing') {
+      res.status(500).json({ error: 'Update failed' });
+      return;
+    }
+    res.json({ user: result.profile });
   } catch (e) {
     console.error('Update profile error:', e);
     res.status(500).json({ error: 'Update failed' });
