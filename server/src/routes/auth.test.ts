@@ -4,15 +4,20 @@ import { createServer, type Server } from 'node:http';
 import bcrypt from 'bcrypt';
 import cookieParser from 'cookie-parser';
 import express from 'express';
+import nodemailer from 'nodemailer';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
+import type { MailMessage } from '../account-auth.js';
 import { getDb, initDb } from '../db.js';
 import { signToken } from '../middleware/auth.js';
-import authRoutes from './auth.js';
+import { createAuthRouter } from './auth.js';
 
-const { sendMail } = vi.hoisted(() => ({
-  sendMail: vi.fn<(message: { html?: string }) => Promise<object>>().mockResolvedValue({}),
-}));
-vi.mock('nodemailer', () => ({ default: { createTransport: () => ({ sendMail }) } }));
+const sentMail: MailMessage[] = [];
+let sendMailError: Error | null = null;
+async function sendMail(message: MailMessage) {
+  if (sendMailError) throw sendMailError;
+  sentMail.push(message);
+  return {};
+}
 
 let server: Server;
 let base: string;
@@ -35,7 +40,7 @@ beforeAll(async () => {
   const app = express();
   app.use(express.json());
   app.use(cookieParser());
-  app.use('/api/auth', authRoutes);
+  app.use('/api/auth', createAuthRouter({ db: getDb, sendMail }));
   server = createServer(app);
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
@@ -45,6 +50,8 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  sentMail.length = 0;
+  sendMailError = null;
   getDb().exec('DELETE FROM email_verification_tokens; DELETE FROM password_reset_tokens; DELETE FROM users;');
   const insert = getDb().prepare(`
     INSERT INTO users (email, password_hash, first_name, height_inches, current_weight_lbs)
@@ -57,7 +64,12 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  getDb().exec('DROP TRIGGER IF EXISTS reject_profile_update');
+  getDb().exec(`
+    DROP TRIGGER IF EXISTS reject_profile_update;
+    DROP TRIGGER IF EXISTS reject_verify_delete;
+    DROP TRIGGER IF EXISTS reject_verify_insert;
+    DROP TRIGGER IF EXISTS reject_reset_mark_used;
+  `);
   vi.restoreAllMocks();
 });
 
@@ -132,7 +144,7 @@ it('registers the persisted normalized Profile with all defaults and keeps verif
   expect(signedIn).toEqual({ user: registered.user, token: expect.any(String) });
   expect(login.headers.get('set-cookie')).toContain(`token=${signedIn.token};`);
 
-  const verificationMail = sendMail.mock.calls.find(([message]) => message.html)?.[0].html;
+  const verificationMail = sentMail.find((message) => message.html)?.html;
   const verificationToken = verificationMail?.match(/verify-email\?token=([a-f0-9]+)/)?.[1];
   expect(verificationToken).toBeTruthy();
   const verified = await request('POST', '/verify-email', { token: verificationToken }, null);
@@ -273,4 +285,298 @@ it('keeps unexpected database update errors at the generic 500 without publishin
   expect(response.status).toBe(500);
   expect(await response.json()).toEqual({ error: 'Update failed' });
   expect(await profile()).toEqual(before);
+});
+
+it('rejects case-variant duplicate email registration with 409', async () => {
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+  const response = await request('POST', '/register', {
+    email: '  Person@example.com  ',
+    password,
+    firstName: 'Duplicate',
+  }, null);
+  expect(response.status).toBe(409);
+  expect(await response.json()).toEqual({ error: 'An account with this email already exists' });
+});
+
+it('escapes HTML special characters in firstName in verification emails', async () => {
+  sentMail.length = 0;
+  const response = await request('POST', '/register', {
+    email: 'xss@example.com',
+    password,
+    firstName: `<A & "B" 'C'>`,
+  }, null);
+  expect(response.status).toBe(200);
+  const verificationHtml = sentMail.find((message) => message.html)?.html;
+  expect(verificationHtml).toContain('&lt;A &amp; &quot;B&quot; &#39;C&#39;&gt;');
+  expect(verificationHtml).not.toContain('<A &');
+});
+
+it('rejects same-UTC-day expired verification and reset tokens', async () => {
+  const expiredSameDay = new Date(Date.now() - 60_000).toISOString();
+  getDb().prepare('INSERT INTO email_verification_tokens (user_id, token, expires_at) VALUES (?, ?, ?)')
+    .run(userId, 'expired-verify-token', expiredSameDay);
+  getDb().prepare('INSERT INTO password_reset_tokens (user_id, token, expires_at) VALUES (?, ?, ?)')
+    .run(userId, 'expired-reset-token', expiredSameDay);
+
+  const verify = await request('POST', '/verify-email', { token: 'expired-verify-token' }, null);
+  expect(verify.status).toBe(400);
+  expect(await verify.json()).toEqual({ error: 'Invalid or expired token' });
+
+  const reset = await request('POST', '/reset-password', { token: 'expired-reset-token', password: 'new-password-123' }, null);
+  expect(reset.status).toBe(400);
+  expect(await reset.json()).toEqual({ error: 'Invalid or expired reset token' });
+});
+
+it('allows at most one concurrent password reset for the same token', async () => {
+  getDb().prepare('INSERT INTO password_reset_tokens (user_id, token, expires_at) VALUES (?, ?, ?)')
+    .run(userId, 'race-reset-token', new Date(Date.now() + 60 * 60 * 1000).toISOString());
+
+  const [first, second] = await Promise.all([
+    request('POST', '/reset-password', { token: 'race-reset-token', password: 'first-new-password' }, null),
+    request('POST', '/reset-password', { token: 'race-reset-token', password: 'second-new-password' }, null),
+  ]);
+  expect([first.status, second.status].sort()).toEqual([200, 400]);
+});
+
+it('returns 404 when the authenticated account is missing on change-password or resend-verification', async () => {
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+  getDb().prepare('DELETE FROM users WHERE id = ?').run(userId);
+
+  const change = await request('POST', '/change-password', {
+    currentPassword: password,
+    newPassword: 'updated-password',
+  });
+  expect(change.status).toBe(404);
+  expect(await change.json()).toEqual({ error: 'User not found' });
+
+  const resend = await request('POST', '/resend-verification');
+  expect(resend.status).toBe(404);
+  expect(await resend.json()).toEqual({ error: 'User not found' });
+});
+
+it('matches login cookie Secure policy when clearing the token cookie on logout', async () => {
+  const prevNodeEnv = process.env.NODE_ENV;
+  try {
+    process.env.NODE_ENV = 'test';
+    const devLogin = await request('POST', '/login', { email: 'person@example.com', password }, null);
+    const devLogout = await request('POST', '/logout', undefined, null);
+    const devLoginCookie = devLogin.headers.get('set-cookie')!;
+    const devLogoutCookie = devLogout.headers.get('set-cookie')!;
+    expect(devLoginCookie).not.toContain('Secure');
+    expect(devLogoutCookie).not.toContain('Secure');
+    expect(devLogoutCookie).toContain('HttpOnly');
+    expect(devLogoutCookie).toContain('SameSite=Strict');
+    expect(devLogoutCookie).toContain('Path=/');
+    expect(devLogoutCookie).toContain('Max-Age=0');
+
+    process.env.NODE_ENV = 'production';
+    const prodLogin = await request('POST', '/login', { email: 'person@example.com', password }, null);
+    const prodLogout = await request('POST', '/logout', undefined, null);
+    expect(prodLogin.headers.get('set-cookie')).toContain('Secure');
+    expect(prodLogout.headers.get('set-cookie')).toContain('Secure');
+  } finally {
+    process.env.NODE_ENV = prevNodeEnv;
+  }
+});
+
+it('returns JSON 500 when email verification fails unexpectedly in the database', async () => {
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+  getDb().prepare('INSERT INTO email_verification_tokens (user_id, token, expires_at) VALUES (?, ?, ?)')
+    .run(userId, 'failing-verify-token', new Date(Date.now() + 60 * 60 * 1000).toISOString());
+  getDb().exec(`
+    CREATE TRIGGER reject_verify_delete BEFORE DELETE ON email_verification_tokens
+    BEGIN SELECT RAISE(ABORT, 'injected verify failure'); END;
+  `);
+
+  const response = await request('POST', '/verify-email', { token: 'failing-verify-token' }, null);
+  expect(response.status).toBe(500);
+  expect(response.headers.get('content-type')).toContain('application/json');
+  expect(await response.json()).toEqual({ error: 'Email verification failed' });
+});
+
+it('handles /change-password validation, incorrect current password, body spoofing, auth checks, and success', async () => {
+  const unauth = await request('POST', '/change-password', { currentPassword: password, newPassword: 'new-password-1' }, null);
+  expect(unauth.status).toBe(401);
+
+  const missing = await request('POST', '/change-password', {});
+  expect(missing.status).toBe(400);
+  expect(await missing.json()).toEqual({ error: 'Current and new password are required' });
+
+  const short = await request('POST', '/change-password', { currentPassword: password, newPassword: 'short' });
+  expect(short.status).toBe(400);
+  expect(await short.json()).toEqual({ error: 'Password must be at least 8 characters' });
+
+  const wrong = await request('POST', '/change-password', { currentPassword: 'wrong-password', newPassword: 'new-password-1' });
+  expect(wrong.status).toBe(401);
+  expect(await wrong.json()).toEqual({ error: 'Current password is incorrect' });
+
+  const changed = await request('POST', '/change-password', {
+    userId: otherId,
+    id: otherId,
+    currentPassword: password,
+    newPassword: 'new-password-1',
+  });
+  expect(changed.status).toBe(200);
+  expect(await changed.json()).toEqual({ success: true });
+
+  expect((await request('POST', '/login', { email: 'person@example.com', password: 'new-password-1' }, null)).status).toBe(200);
+  expect((await request('POST', '/login', { email: 'other@example.com', password }, null)).status).toBe(200);
+});
+
+it('handles /resend-verification for unverified, verified, unauthenticated, and mail failure cases', async () => {
+  const unauth = await request('POST', '/resend-verification', undefined, null);
+  expect(unauth.status).toBe(401);
+
+  const resent = await request('POST', '/resend-verification');
+  expect(resent.status).toBe(200);
+  expect(await resent.json()).toEqual({ success: true });
+  expect(sentMail).toHaveLength(1);
+  const resendToken = sentMail[0].html?.match(/verify-email\?token=([a-f0-9]+)/)?.[1];
+  expect(resendToken).toBeTruthy();
+
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+  sendMailError = new Error('smtp unreachable');
+  const failed = await request('POST', '/resend-verification');
+  expect(failed.status).toBe(500);
+  expect(await failed.json()).toEqual({ error: 'Failed to resend' });
+  sendMailError = null;
+
+  const latestToken = (getDb().prepare('SELECT token FROM email_verification_tokens WHERE user_id = ?').get(userId) as { token: string }).token;
+  expect((await request('POST', '/verify-email', { token: latestToken }, null)).status).toBe(200);
+
+  sentMail.length = 0;
+  const already = await request('POST', '/resend-verification');
+  expect(already.status).toBe(200);
+  expect(await already.json()).toEqual({ success: true, message: 'Already verified' });
+  expect(sentMail).toHaveLength(0);
+});
+
+it('handles /forgot-password and /reset-password flows including mail failure and registration non-failure on mail error', async () => {
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+
+  const missingEmail = await request('POST', '/forgot-password', {}, null);
+  expect(missingEmail.status).toBe(400);
+  expect(await missingEmail.json()).toEqual({ error: 'Email is required' });
+
+  const unknownEmail = await request('POST', '/forgot-password', { email: 'missing@example.com' }, null);
+  expect(unknownEmail.status).toBe(200);
+  expect(await unknownEmail.json()).toEqual({ success: true });
+  expect(sentMail).toHaveLength(0);
+
+  sendMailError = new Error('smtp timeout');
+  const forgotFailed = await request('POST', '/forgot-password', { email: 'person@example.com' }, null);
+  expect(forgotFailed.status).toBe(500);
+  expect(await forgotFailed.json()).toEqual({ error: 'Request failed' });
+
+  const regDespiteMailFail = await request('POST', '/register', {
+    email: 'still-ok@example.com',
+    password,
+    firstName: 'StillOk',
+  }, null);
+  expect(regDespiteMailFail.status).toBe(200);
+  sendMailError = null;
+
+  const forgotOk = await request('POST', '/forgot-password', { email: '  PERSON@example.com ' }, null);
+  expect(forgotOk.status).toBe(200);
+  expect(await forgotOk.json()).toEqual({ success: true });
+  expect(sentMail).toHaveLength(1);
+  const resetToken = sentMail[0].html?.match(/reset-password\?token=([a-f0-9]+)/)?.[1];
+  expect(resetToken).toBeTruthy();
+
+  const missingResetFields = await request('POST', '/reset-password', {}, null);
+  expect(missingResetFields.status).toBe(400);
+  expect(await missingResetFields.json()).toEqual({ error: 'Token and password are required' });
+
+  const shortResetPassword = await request('POST', '/reset-password', { token: resetToken, password: 'short' }, null);
+  expect(shortResetPassword.status).toBe(400);
+  expect(await shortResetPassword.json()).toEqual({ error: 'Password must be at least 8 characters' });
+
+  const resetOk = await request('POST', '/reset-password', { token: resetToken, password: 'reset-password-1' }, null);
+  expect(resetOk.status).toBe(200);
+  expect(await resetOk.json()).toEqual({ success: true });
+  expect((await request('POST', '/login', { email: 'person@example.com', password: 'reset-password-1' }, null)).status).toBe(200);
+
+  const reuseToken = await request('POST', '/reset-password', { token: resetToken, password: 'reset-password-2' }, null);
+  expect(reuseToken.status).toBe(400);
+  expect(await reuseToken.json()).toEqual({ error: 'Invalid or expired reset token' });
+});
+
+it('lazily initializes and reuses one mail transport per router while reading APP_URL and SMTP_FROM dynamically', async () => {
+  const delivered: MailMessage[] = [];
+  const createTransportSpy = vi.spyOn(nodemailer, 'createTransport').mockReturnValue({
+    sendMail: async (message: MailMessage) => {
+      delivered.push(message);
+      return {};
+    },
+  } as unknown as nodemailer.Transporter);
+
+  const lazyRouter = createAuthRouter();
+  expect(createTransportSpy).not.toHaveBeenCalled();
+
+  const lazyApp = express();
+  lazyApp.use(express.json());
+  lazyApp.use('/api/auth', lazyRouter);
+  const lazyServer = createServer(lazyApp);
+  lazyServer.listen(0, '127.0.0.1');
+  await once(lazyServer, 'listening');
+
+  const prevEnv = {
+    SMTP_HOST: process.env.SMTP_HOST,
+    SMTP_PORT: process.env.SMTP_PORT,
+    SMTP_SECURE: process.env.SMTP_SECURE,
+    SMTP_USER: process.env.SMTP_USER,
+    SMTP_PASS: process.env.SMTP_PASS,
+    SMTP_FROM: process.env.SMTP_FROM,
+    APP_URL: process.env.APP_URL,
+  };
+
+  try {
+    const addr = lazyServer.address();
+    if (!addr || typeof addr === 'string') throw new Error('Expected a TCP port');
+    const lazyBase = `http://127.0.0.1:${addr.port}/api/auth`;
+
+    process.env.SMTP_HOST = 'smtp.runtime.test';
+    process.env.SMTP_PORT = '587';
+    process.env.SMTP_SECURE = 'true';
+    process.env.SMTP_USER = 'mailer';
+    process.env.SMTP_PASS = 'secret';
+    process.env.SMTP_FROM = 'first@runtime.test';
+    process.env.APP_URL = 'https://first.runtime.test';
+
+    const first = await fetch(`${lazyBase}/forgot-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'person@example.com' }),
+    });
+    expect(first.status).toBe(200);
+    expect(createTransportSpy).toHaveBeenCalledTimes(1);
+    expect(createTransportSpy).toHaveBeenCalledWith({
+      host: 'smtp.runtime.test',
+      port: 587,
+      secure: true,
+      auth: { user: 'mailer', pass: 'secret' },
+    });
+
+    process.env.SMTP_FROM = 'second@runtime.test';
+    process.env.APP_URL = 'https://second.runtime.test';
+
+    const second = await fetch(`${lazyBase}/forgot-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'other@example.com' }),
+    });
+    expect(second.status).toBe(200);
+    expect(createTransportSpy).toHaveBeenCalledTimes(1);
+    expect(delivered).toHaveLength(2);
+    expect(delivered[0].from).toBe('first@runtime.test');
+    expect(delivered[0].html).toContain('https://first.runtime.test/#/reset-password?token=');
+    expect(delivered[1].from).toBe('second@runtime.test');
+    expect(delivered[1].html).toContain('https://second.runtime.test/#/reset-password?token=');
+  } finally {
+    for (const [key, value] of Object.entries(prevEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    await new Promise<void>((resolve, reject) => lazyServer.close((err) => (err ? reject(err) : resolve())));
+  }
 });
