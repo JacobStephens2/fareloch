@@ -26,7 +26,7 @@ export interface MailMessage {
 
 export type SendMail = (message: MailMessage) => Promise<unknown>;
 export type MailErrorKind = 'verification' | 'admin-notification';
-export type MailErrorHandler = (kind: MailErrorKind, error: unknown) => void;
+export type MailErrorHandler = (kind: MailErrorKind, error: unknown) => void | Promise<void>;
 
 export interface AccountAuthDeps {
   db: Database.Database | (() => Database.Database);
@@ -214,12 +214,20 @@ export function createAccountAuth(deps: AccountAuthDeps): AccountAuth {
   const getAppUrl = () => deps.appUrl ?? (process.env.APP_URL || DEFAULT_APP_URL);
   const getSmtpFrom = () => deps.smtpFrom ?? (process.env.SMTP_FROM || DEFAULT_SMTP_FROM);
   const adminNotifyEmail = deps.adminNotifyEmail ?? DEFAULT_ADMIN_NOTIFY_EMAIL;
-  const reportMailError: MailErrorHandler = deps.onMailError ?? ((kind, error) => {
+  const onMailError: MailErrorHandler = deps.onMailError ?? ((kind, error) => {
     const prefix = kind === 'verification'
       ? 'Failed to send verification email:'
       : 'Failed to send admin notification:';
     console.error(prefix, error);
   });
+
+  async function reportMailError(kind: MailErrorKind, error: unknown): Promise<void> {
+    try {
+      await onMailError(kind, error);
+    } catch {
+      // Reporting must not fail committed signup or prevent the remaining mail attempt.
+    }
+  }
 
   async function register(input: unknown, userAgent?: string): Promise<RegisterResult> {
     const body = asRecord(input);
@@ -283,7 +291,7 @@ export function createAccountAuth(deps: AccountAuthDeps): AccountAuth {
         token: created.verifyToken,
       }));
     } catch (error) {
-      reportMailError('verification', error);
+      await reportMailError('verification', error);
     }
 
     try {
@@ -295,7 +303,7 @@ export function createAccountAuth(deps: AccountAuthDeps): AccountAuth {
         text: `A new account was created on Fareloch.\n\nName: ${firstName}\nEmail: ${email}\nDate: ${now().toISOString()}\nDevice: ${device}`,
       });
     } catch (error) {
-      reportMailError('admin-notification', error);
+      await reportMailError('admin-notification', error);
     }
 
     const token = deps.signToken({

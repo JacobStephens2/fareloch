@@ -145,6 +145,42 @@ it('registers a normalized account, commits verification token atomically, escap
   expect(db.prepare('SELECT id FROM users WHERE email = ?').get('rollback@example.com')).toBeUndefined();
 });
 
+it.each(['throws', 'rejects'])('completes signup and attempts both notifications when mail fails and its reporter %s', async (failureMode) => {
+  const deliveryError = new Error('SMTP unavailable');
+  const reporterError = new Error('Reporter unavailable');
+  const reported: Array<{ kind: string; error: unknown }> = [];
+  const auth = makeAuth({
+    sendMail: async (message) => {
+      sentMail.push(message);
+      throw deliveryError;
+    },
+    onMailError: (kind, error) => {
+      reported.push({ kind, error });
+      if (failureMode === 'rejects') return Promise.reject(reporterError);
+      throw reporterError;
+    },
+  });
+
+  const result = await auth.register({
+    email: 'reporter@example.com',
+    password: 'password123',
+    firstName: 'Reporter',
+  });
+  if (result.kind !== 'registered') throw new Error('Expected registered');
+  expect(result.user.email).toBe('reporter@example.com');
+  expect(result.token).toBe(`token:${result.user.id}:reporter@example.com:Reporter`);
+  expect(sentMail.map((message) => message.subject)).toEqual([
+    'Verify your Fareloch account',
+    'Fareloch — New Account Created',
+  ]);
+  expect(reported).toEqual([
+    { kind: 'verification', error: deliveryError },
+    { kind: 'admin-notification', error: deliveryError },
+  ]);
+  expect((await auth.login({ email: 'reporter@example.com', password: 'password123' })).kind)
+    .toBe('logged-in');
+});
+
 it('logs in with normalized email, returns readProfile and signed token, and rejects invalid inputs or credentials', async () => {
   const auth = makeAuth();
   const registered = await auth.register({
