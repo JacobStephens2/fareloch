@@ -3,7 +3,6 @@ import type Database from 'better-sqlite3';
 import nodemailer from 'nodemailer';
 import {
   createAccountAuth,
-  type MailErrorHandler,
   type SendMail,
 } from '../account-auth.js';
 import { getDb } from '../db.js';
@@ -11,21 +10,13 @@ import {
   clearTokenCookie,
   requireAuth,
   setTokenCookie,
-  signToken as defaultSignToken,
-  type AuthPayload,
+  signToken,
 } from '../middleware/auth.js';
 import { readProfile, updateProfile } from '../profile.js';
 
 export interface AuthRouterDeps {
   db?: Database.Database | (() => Database.Database);
   sendMail?: SendMail;
-  signToken?: (payload: AuthPayload) => string;
-  appUrl?: string | (() => string);
-  smtpFrom?: string | (() => string);
-  adminNotifyEmail?: string | (() => string);
-  bcryptRounds?: number;
-  now?: () => Date;
-  onMailError?: MailErrorHandler;
 }
 
 function createLazyMailSender(): SendMail {
@@ -55,7 +46,7 @@ function assertNever(value: never): never {
 }
 
 /**
- * Builds the Express authentication router with injectable database, mail, and clock ports.
+ * Builds the Express authentication router with optional database and mail ports.
  */
 export function createAuthRouter(deps: AuthRouterDeps = {}): Router {
   const router = Router();
@@ -68,13 +59,7 @@ export function createAuthRouter(deps: AuthRouterDeps = {}): Router {
   const accountAuth = createAccountAuth({
     db: resolveDb,
     sendMail: deps.sendMail ?? createLazyMailSender(),
-    signToken: deps.signToken ?? defaultSignToken,
-    appUrl: deps.appUrl,
-    smtpFrom: deps.smtpFrom,
-    adminNotifyEmail: deps.adminNotifyEmail,
-    bcryptRounds: deps.bcryptRounds,
-    now: deps.now,
-    onMailError: deps.onMailError,
+    signToken,
   });
 
   // Register

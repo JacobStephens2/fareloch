@@ -32,9 +32,9 @@ export interface AccountAuthDeps {
   db: Database.Database | (() => Database.Database);
   sendMail: SendMail;
   signToken: (payload: AuthPayload) => string;
-  appUrl?: string | (() => string);
-  smtpFrom?: string | (() => string);
-  adminNotifyEmail?: string | (() => string);
+  appUrl?: string;
+  smtpFrom?: string;
+  adminNotifyEmail?: string;
   bcryptRounds?: number;
   now?: () => Date;
   onMailError?: MailErrorHandler;
@@ -112,18 +112,35 @@ function normalizeEmail(raw: string): string {
   return raw.toLowerCase().trim();
 }
 
-function resolveString(value: string | (() => string) | undefined, fallback: () => string): string {
-  if (typeof value === 'function') return value();
-  if (typeof value === 'string') return value;
-  return fallback();
-}
-
 function futureIso(base: Date, offsetMs: number): string {
   return new Date(base.getTime() + offsetMs).toISOString();
 }
 
 function randomToken(): string {
   return crypto.randomBytes(32).toString('hex');
+}
+
+function validateMinPassword(password: string): string | null {
+  return password.length < MIN_PASSWORD_LENGTH
+    ? `Password must be at least ${MIN_PASSWORD_LENGTH} characters`
+    : null;
+}
+
+function issueToken(
+  db: Database.Database,
+  table: 'email_verification_tokens' | 'password_reset_tokens',
+  userId: number,
+  now: () => Date,
+  ttlMs: number,
+): string {
+  const token = randomToken();
+  const expiresAt = futureIso(now(), ttlMs);
+  db.prepare(`INSERT INTO ${table} (user_id, token, expires_at) VALUES (?, ?, ?)`).run(
+    userId,
+    token,
+    expiresAt,
+  );
+  return token;
 }
 
 function isUniqueConstraintError(error: unknown): boolean {
@@ -194,9 +211,9 @@ export function createAccountAuth(deps: AccountAuthDeps): AccountAuth {
   const resolveDb = typeof deps.db === 'function' ? deps.db : () => deps.db as Database.Database;
   const bcryptRounds = deps.bcryptRounds ?? DEFAULT_BCRYPT_ROUNDS;
   const now = deps.now ?? (() => new Date());
-  const getAppUrl = () => resolveString(deps.appUrl, () => process.env.APP_URL || DEFAULT_APP_URL);
-  const getSmtpFrom = () => resolveString(deps.smtpFrom, () => process.env.SMTP_FROM || DEFAULT_SMTP_FROM);
-  const getAdminEmail = () => resolveString(deps.adminNotifyEmail, () => DEFAULT_ADMIN_NOTIFY_EMAIL);
+  const getAppUrl = () => deps.appUrl ?? (process.env.APP_URL || DEFAULT_APP_URL);
+  const getSmtpFrom = () => deps.smtpFrom ?? (process.env.SMTP_FROM || DEFAULT_SMTP_FROM);
+  const adminNotifyEmail = deps.adminNotifyEmail ?? DEFAULT_ADMIN_NOTIFY_EMAIL;
   const reportMailError: MailErrorHandler = deps.onMailError ?? ((kind, error) => {
     const prefix = kind === 'verification'
       ? 'Failed to send verification email:'
@@ -212,8 +229,9 @@ export function createAccountAuth(deps: AccountAuthDeps): AccountAuth {
     if (!email || !password || !firstName) {
       return { kind: 'invalid-input', error: 'Email, password, and first name are required' };
     }
-    if (password.length < MIN_PASSWORD_LENGTH) {
-      return { kind: 'invalid-input', error: 'Password must be at least 8 characters' };
+    const passwordError = validateMinPassword(password);
+    if (passwordError) {
+      return { kind: 'invalid-input', error: passwordError };
     }
 
     const db = resolveDb();
@@ -236,13 +254,7 @@ export function createAccountAuth(deps: AccountAuthDeps): AccountAuth {
         ).run(email, passwordHash, firstName, DEFAULT_HEIGHT_INCHES, DEFAULT_WEIGHT_LBS);
         const userId = Number(result.lastInsertRowid);
 
-        const verifyToken = randomToken();
-        const expiresAt = futureIso(now(), VERIFICATION_TOKEN_TTL_MS);
-        db.prepare('INSERT INTO email_verification_tokens (user_id, token, expires_at) VALUES (?, ?, ?)').run(
-          userId,
-          verifyToken,
-          expiresAt,
-        );
+        const verifyToken = issueToken(db, 'email_verification_tokens', userId, now, VERIFICATION_TOKEN_TTL_MS);
 
         const user = readProfile(db, userId);
         if (!user) throw new Error('User not found');
@@ -278,7 +290,7 @@ export function createAccountAuth(deps: AccountAuthDeps): AccountAuth {
       const device = (typeof userAgent === 'string' ? userAgent : '').slice(0, MAX_USER_AGENT_LENGTH) || 'unknown';
       await deps.sendMail({
         from: smtpFrom,
-        to: getAdminEmail(),
+        to: adminNotifyEmail,
         subject: 'Fareloch — New Account Created',
         text: `A new account was created on Fareloch.\n\nName: ${firstName}\nEmail: ${email}\nDate: ${now().toISOString()}\nDevice: ${device}`,
       });
@@ -335,8 +347,9 @@ export function createAccountAuth(deps: AccountAuthDeps): AccountAuth {
     if (!currentPassword || !newPassword) {
       return { kind: 'invalid-input', error: 'Current and new password are required' };
     }
-    if (newPassword.length < MIN_PASSWORD_LENGTH) {
-      return { kind: 'invalid-input', error: 'Password must be at least 8 characters' };
+    const passwordError = validateMinPassword(newPassword);
+    if (passwordError) {
+      return { kind: 'invalid-input', error: passwordError };
     }
 
     const db = resolveDb();
@@ -403,13 +416,7 @@ export function createAccountAuth(deps: AccountAuthDeps): AccountAuth {
       if (user.email_verified) return { status: 'already-verified' };
 
       db.prepare('DELETE FROM email_verification_tokens WHERE user_id = ?').run(user.id);
-      const verifyToken = randomToken();
-      const expiresAt = futureIso(now(), VERIFICATION_TOKEN_TTL_MS);
-      db.prepare('INSERT INTO email_verification_tokens (user_id, token, expires_at) VALUES (?, ?, ?)').run(
-        user.id,
-        verifyToken,
-        expiresAt,
-      );
+      const verifyToken = issueToken(db, 'email_verification_tokens', user.id, now, VERIFICATION_TOKEN_TTL_MS);
       return { status: 'ready', email: user.email, firstName: user.first_name, verifyToken };
     }).immediate();
 
@@ -441,13 +448,7 @@ export function createAccountAuth(deps: AccountAuthDeps): AccountAuth {
         | undefined;
       if (!user) return null;
 
-      const resetToken = randomToken();
-      const expiresAt = futureIso(now(), PASSWORD_RESET_TOKEN_TTL_MS);
-      db.prepare('INSERT INTO password_reset_tokens (user_id, token, expires_at) VALUES (?, ?, ?)').run(
-        user.id,
-        resetToken,
-        expiresAt,
-      );
+      const resetToken = issueToken(db, 'password_reset_tokens', user.id, now, PASSWORD_RESET_TOKEN_TTL_MS);
       return { email: user.email, firstName: user.first_name, resetToken };
     }).immediate();
 
@@ -473,8 +474,9 @@ export function createAccountAuth(deps: AccountAuthDeps): AccountAuth {
     if (!token || !password) {
       return { kind: 'invalid-input', error: 'Token and password are required' };
     }
-    if (password.length < MIN_PASSWORD_LENGTH) {
-      return { kind: 'invalid-input', error: 'Password must be at least 8 characters' };
+    const passwordError = validateMinPassword(password);
+    if (passwordError) {
+      return { kind: 'invalid-input', error: passwordError };
     }
 
     const db = resolveDb();
