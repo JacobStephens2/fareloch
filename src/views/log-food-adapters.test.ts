@@ -63,6 +63,41 @@ it('Done keeps a valid Dashboard date after an invalid Log Food route', async ()
   expect(document.querySelector('#date-sub')!.textContent).not.toBe('Invalid Date');
 });
 
+it('Done does not report a quick-log that succeeded on retry', async () => {
+  setGuestMode(false);
+  const apple = { ...food('HTTP apple'), id: 1 };
+  const banana = { ...food('HTTP banana'), id: 2 };
+  const firstApple = deferred<Response>();
+  const pendingBanana = deferred<Response>();
+  let appleAttempts = 0;
+  vi.stubGlobal('fetch', (url: string, options?: RequestInit) => {
+    if (url === '/api/foods/recent') return Promise.resolve(Response.json({ foods: [apple, banana] }));
+    if (url === '/api/meals') {
+      const { foodId } = JSON.parse(String(options?.body));
+      if (foodId === banana.id) return pendingBanana.promise;
+      if (++appleAttempts === 1) return firstApple.promise;
+      return Promise.resolve(Response.json({ meal: { id: 17 } }));
+    }
+    return Promise.resolve(Response.json({ meals: [], checks: [], workout: false }));
+  });
+  go('/log?date=2026-04-01&meal=lunch');
+  click('[data-tab="recent"]');
+  await settle();
+  const addApple = () => click('[aria-label="Quick-log one serving of HTTP apple"]');
+  addApple();
+  click('[aria-label="Quick-log one serving of HTTP banana"]');
+  click('#log-food-done');
+  firstApple.resolve(Response.json({ error: 'Unavailable' }, { status: 503 }));
+  await settle();
+  addApple();
+  await settle();
+  expect(document.querySelector('#quick-log-feedback')!.textContent).toContain('Added HTTP apple');
+  pendingBanana.resolve(Response.json({ meal: { id: 18 } }));
+  await settle();
+  expect(window.location.hash).toBe('#/');
+  expect(document.body.textContent).not.toMatch(/could not add HTTP apple/i);
+});
+
 it('signed-in quick-log sends one authenticated default-serving write while the same Food is pending', async () => {
   setGuestMode(false);
   setToken('quick-log-token');

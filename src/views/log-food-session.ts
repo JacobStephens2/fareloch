@@ -21,7 +21,7 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
   let addedEntries = 0;
   let pendingWrites = 0;
   let finishing = false;
-  const failedWritesWhileFinishing: string[] = [];
+  const failedWritesWhileFinishing = new Map<string | symbol, string>();
   const pendingQuickLogs = new Set<string>();
   const routeHash = window.location.hash;
   const find = <T extends HTMLElement = HTMLElement>(id: string) => root.querySelector<T>(`#${id}`)!;
@@ -86,22 +86,24 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
   function finishWhenReady() {
     if (!finishing || pendingWrites !== 0 || !isLive()) return;
     state.selectedDate = date;
-    if (failedWritesWhileFinishing.length) {
-      state.mealLogNotice = `${failedWritesWhileFinishing.join(' ')} Open Log Food to retry.`;
+    if (failedWritesWhileFinishing.size) {
+      const failures = [...failedWritesWhileFinishing.values()].join(' ');
+      state.mealLogNotice = `${failures} Open Log Food to retry.`;
     }
     navigate('#/');
   }
 
-  async function recordEntry(write: () => Promise<unknown>, failureMessage: string) {
+  async function recordEntry(key: string | symbol, write: () => Promise<unknown>, failureMessage: string) {
     pendingWrites++;
     try {
       await write();
+      failedWritesWhileFinishing.delete(key);
       if (isLive()) {
         addedEntries++;
         find('log-food-count').textContent = `${addedEntries} ${addedEntries === 1 ? 'entry' : 'entries'} added`;
       }
     } catch (error) {
-      if (finishing && isLive()) failedWritesWhileFinishing.push(failureMessage);
+      if (finishing && isLive()) failedWritesWhileFinishing.set(key, failureMessage);
       throw error;
     } finally {
       pendingWrites--;
@@ -118,7 +120,7 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
     const failureMessage = `Could not add ${name}.`;
     try {
       feedback.textContent = '';
-      await recordEntry(() => meals.log({ date, mealType, ...identity, servings: 1 }), failureMessage);
+      await recordEntry(key, () => meals.log({ date, mealType, ...identity, servings: 1 }), failureMessage);
       if (isLive()) feedback.textContent = ` · Added ${name}.`;
     } catch {
       if (isLive()) feedback.textContent = ` · ${failureMessage} Use + to retry.`;
@@ -153,9 +155,10 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
   });
 
   function showQuickAdd() {
+    const key = Symbol();
     showForm({
       kind: 'quick', date, mealType, isParentLive: isLive,
-      quickLog: data => recordEntry(() => meals.quickLog(data), 'Could not save a Quick Add entry.'),
+      quickLog: data => recordEntry(key, () => meals.quickLog(data), 'Could not save a Quick Add entry.'),
       onSaved: showQuickAdd,
     });
   }
@@ -225,8 +228,9 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
     if (!isLive()) return;
     disposeMealAdd?.();
     const { name } = selection.kind === 'food' ? selection.food : selection.recipe;
+    const key = Symbol();
     disposeMealAdd = mountMealAddSession(find('food-detail-modal'), selection, date, mealType, isLive,
-      data => recordEntry(() => meals.log(data), `Could not add ${name}.`));
+      data => recordEntry(key, () => meals.log(data), `Could not add ${name}.`));
   }
 
   function showForm(options: Parameters<typeof mountLogFoodFormSession>[1]) {
