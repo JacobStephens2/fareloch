@@ -33,6 +33,8 @@ function getTargets(isWorkout: boolean) {
 
 export function dashboardView() {
   const date = state.selectedDate;
+  const mealLogNotice = state.mealLogNotice;
+  state.mealLogNotice = undefined;
   const t = getTargets(false);
 
   const showSampleBanner = isGuestMode() && hasSampleData();
@@ -59,6 +61,8 @@ export function dashboardView() {
           </div>
           <button id="date-next" class="btn-icon" aria-label="Next day">&rarr;</button>
         </div>
+
+        ${mealLogNotice ? '<p id="meal-log-notice" class="form-error" role="status"></p>' : ''}
 
         <label class="workout-toggle" id="workout-toggle-wrap">
           <input type="checkbox" id="workout-toggle" />
@@ -149,7 +153,11 @@ export function dashboardView() {
         </div>
       </div>
     `,
-    init: () => mountDashboardDateSession(document.getElementById('app')!.querySelector<HTMLElement>('.dashboard-page')!, date),
+    init: () => {
+      const root = document.getElementById('app')!.querySelector<HTMLElement>('.dashboard-page')!;
+      if (mealLogNotice) root.querySelector('#meal-log-notice')!.textContent = mealLogNotice;
+      mountDashboardDateSession(root, date);
+    },
   };
 }
 
@@ -379,7 +387,10 @@ function mountDashboardDateSession(root: HTMLElement, initialDate: string) {
     modal.classList.add('hidden');
     // Date changes clear the live modal; retirement only releases resources.
     modalBody.replaceChildren();
-    if (date !== selectedDate) currentMeals = [];
+    if (date !== selectedDate) {
+      currentMeals = [];
+      find('meal-log-notice')?.remove();
+    }
     selectedDate = date;
     state.selectedDate = date;
     mealStatus = 'loading';

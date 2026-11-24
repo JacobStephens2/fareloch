@@ -21,6 +21,7 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
   let addedEntries = 0;
   let pendingWrites = 0;
   let finishing = false;
+  const failedWritesWhileFinishing: string[] = [];
   const pendingQuickLogs = new Set<string>();
   const routeHash = window.location.hash;
   const find = <T extends HTMLElement = HTMLElement>(id: string) => root.querySelector<T>(`#${id}`)!;
@@ -85,10 +86,13 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
   function finishWhenReady() {
     if (!finishing || pendingWrites !== 0 || !isLive()) return;
     state.selectedDate = date;
+    if (failedWritesWhileFinishing.length) {
+      state.mealLogNotice = `${failedWritesWhileFinishing.join(' ')} Open Log Food to retry.`;
+    }
     navigate('#/');
   }
 
-  async function recordEntry(write: () => Promise<unknown>) {
+  async function recordEntry(write: () => Promise<unknown>, failureMessage: string) {
     pendingWrites++;
     try {
       await write();
@@ -96,6 +100,9 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
         addedEntries++;
         find('log-food-count').textContent = `${addedEntries} ${addedEntries === 1 ? 'entry' : 'entries'} added`;
       }
+    } catch (error) {
+      if (finishing && isLive()) failedWritesWhileFinishing.push(failureMessage);
+      throw error;
     } finally {
       pendingWrites--;
       finishWhenReady();
@@ -108,12 +115,13 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
     pendingQuickLogs.add(key);
     const feedback = find('quick-log-feedback');
     const identity = kind === 'food' ? { foodId: id } : { recipeId: id };
+    const failureMessage = `Could not add ${name}.`;
     try {
       feedback.textContent = '';
-      await recordEntry(() => meals.log({ date, mealType, ...identity, servings: 1 }));
+      await recordEntry(() => meals.log({ date, mealType, ...identity, servings: 1 }), failureMessage);
       if (isLive()) feedback.textContent = ` · Added ${name}.`;
     } catch {
-      if (isLive()) feedback.textContent = ` · Could not add ${name}. Use + to retry.`;
+      if (isLive()) feedback.textContent = ` · ${failureMessage} Use + to retry.`;
     } finally {
       pendingQuickLogs.delete(key);
     }
@@ -147,7 +155,7 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
   function showQuickAdd() {
     showForm({
       kind: 'quick', date, mealType, isParentLive: isLive,
-      quickLog: data => recordEntry(() => meals.quickLog(data)),
+      quickLog: data => recordEntry(() => meals.quickLog(data), 'Could not save a Quick Add entry.'),
       onSaved: showQuickAdd,
     });
   }
@@ -183,12 +191,13 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
 
   async function lookupBarcode(code: string) {
     if (!isLive()) return;
-    const content = find('tab-content')!;
+    ++tabRevision;
     content.innerHTML = '<div class="loading-spinner">Looking up barcode...</div>';
 
     try {
       const { food } = await foodsApi.barcode(code);
       if (!isLive()) return;
+      ++tabRevision;
       showAddModal(food);
       const found = document.createElement('p');
       found.className = 'text-muted';
@@ -196,6 +205,7 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
       content.replaceChildren(found);
     } catch {
       if (!isLive()) return;
+      ++tabRevision;
       const missing = document.createElement('p');
       missing.className = 'form-error';
       missing.append('No product found for barcode ', document.createTextNode(code));
@@ -214,8 +224,9 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
   function showMealAdd(selection: Parameters<typeof mountMealAddSession>[1]) {
     if (!isLive()) return;
     disposeMealAdd?.();
+    const { name } = selection.kind === 'food' ? selection.food : selection.recipe;
     disposeMealAdd = mountMealAddSession(find('food-detail-modal'), selection, date, mealType, isLive,
-      data => recordEntry(() => meals.log(data)));
+      data => recordEntry(() => meals.log(data), `Could not add ${name}.`));
   }
 
   function showForm(options: Parameters<typeof mountLogFoodFormSession>[1]) {

@@ -32,6 +32,37 @@ afterEach(() => {
 
 const settle = () => vi.advanceTimersByTimeAsync(0);
 
+it('Done reports a rejected pending quick-log', async () => {
+  setGuestMode(false);
+  const pending = deferred<Response>();
+  const saved = food('HTTP apple');
+  vi.stubGlobal('fetch', (url: string) => {
+    if (url === '/api/foods/recent') return Promise.resolve(Response.json({ foods: [saved] }));
+    if (url === '/api/meals') return pending.promise;
+    return Promise.resolve(Response.json({ meals: [], checks: [], workout: false }));
+  });
+  go('/log?date=2026-04-01&meal=lunch');
+  click('[data-tab="recent"]');
+  await settle();
+  click('[aria-label="Quick-log one serving of HTTP apple"]');
+  click('#log-food-done');
+  expect(window.location.hash).toBe('#/log?date=2026-04-01&meal=lunch');
+  pending.resolve(Response.json({ error: 'Unavailable' }, { status: 503 }));
+  await settle();
+  expect(window.location.hash).toBe('#/');
+  expect(document.body.textContent).toMatch(/could not add HTTP apple/i);
+});
+
+it('Done keeps a valid Dashboard date after an invalid Log Food route', async () => {
+  go('/log?date=invalid&meal=lunch');
+  click('#log-food-done');
+  await settle();
+  expect(window.location.hash).toBe('#/');
+  expect(document.querySelector('#date-sub')!.textContent).not.toBe('Invalid Date');
+  click('#date-prev');
+  expect(document.querySelector('#date-sub')!.textContent).not.toBe('Invalid Date');
+});
+
 it('signed-in quick-log sends one authenticated default-serving write while the same Food is pending', async () => {
   setGuestMode(false);
   setToken('quick-log-token');

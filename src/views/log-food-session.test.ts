@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { foods, meals, recipes } from '../api';
 import { route, startRouter } from '../router';
@@ -56,6 +57,23 @@ afterEach(() => {
 });
 
 const settle = () => vi.advanceTimersByTimeAsync(0);
+
+it('Done uses the shared primary button radius', async () => {
+  go('/log');
+  const style = document.createElement('style');
+  style.textContent = await readFile('src/styles.css', 'utf8');
+  const primary = document.createElement('button');
+  primary.className = 'btn btn-primary';
+  document.head.append(style);
+  document.body.append(primary);
+  try {
+    const done = document.querySelector('#log-food-done')!;
+    expect(getComputedStyle(done).borderRadius).toBe(getComputedStyle(primary).borderRadius);
+  } finally {
+    primary.remove();
+    style.remove();
+  }
+});
 
 it.each(['root', 'ancestor', '#modal-body', '#scanner-video', '[data-tab="quick"]', '#food-search', '#tab-content'])(
   'retained Back stays retired after synchronous %s departure and reconnection', async departure => {
