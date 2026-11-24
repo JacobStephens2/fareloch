@@ -67,11 +67,13 @@ type MealCsvRow = Pick<JoinedMeal,
   | 'food_name' | 'food_brand' | 'recipe_name'
 >;
 
-type CopySource = Pick<StoredMeal,
-  'meal_type' | 'food_id' | 'recipe_id' | 'servings' | 'calories' | 'carbs_g' | 'protein_g' | 'fat_g' | 'note'
->;
-
 type MealId = string | number | bigint;
+
+const mealInsertColumns = [
+  'user_id', 'date', 'meal_type', 'food_id', 'recipe_id', 'servings', 'calories', 'carbs_g', 'protein_g', 'fat_g', 'note',
+] as const;
+const mealInsertColumnsWithUnit = [...mealInsertColumns, 'unit_label', 'unit_scale'] as const;
+type CopySource = Omit<Pick<StoredMeal, typeof mealInsertColumns[number]>, 'user_id' | 'date'>;
 
 const mealJoins = `
   FROM meal_logs m
@@ -99,6 +101,22 @@ function readSavedMeal(db: Database.Database, userId: number, id: MealId): Joine
 
 function manualMacros({ calories, carbsG, proteinG, fatG }: MealMacrosInput): Macros {
   return { calories: calories || 0, carbsG: carbsG || 0, proteinG: proteinG || 0, fatG: fatG || 0 };
+}
+
+function macroColumns({ calories, carbsG, proteinG, fatG }: Macros) {
+  return { calories, carbs_g: carbsG, protein_g: proteinG, fat_g: fatG };
+}
+
+function prepareMealInsert<Column extends keyof StoredMeal>(db: Database.Database, columns: readonly Column[]) {
+  const statement = db.prepare<[Pick<StoredMeal, Column>]>(`
+    INSERT INTO meal_logs (${columns.join(', ')})
+    VALUES (${columns.map(column => `@${column}`).join(', ')})
+  `);
+  return (values: Pick<StoredMeal, Column>) => {
+    const { changes, lastInsertRowid } = statement.run(values);
+    if (changes !== 1) throw new Error('Meal insert did not create a row');
+    return lastInsertRowid;
+  };
 }
 
 export function mealsForDate(db: Database.Database, userId: number, date: string): JoinedMeal[] {
@@ -147,27 +165,40 @@ export function logMeal(db: Database.Database, userId: number, input: MealLogInp
       if (recipe) macros = scaleMacros(recipePerServing(recipe, recipeIngredientRows(db, recipe)), finalServings);
     }
 
-    const stored = roundMacros(macros, 'stored');
-    const { lastInsertRowid } = db.prepare(`
-      INSERT INTO meal_logs (user_id, date, meal_type, food_id, recipe_id, servings, calories, carbs_g, protein_g, fat_g, note, unit_label, unit_scale)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(userId, date, mealType, foodId || null, recipeId || null, finalServings,
-      stored.calories, stored.carbsG, stored.proteinG, stored.fatG, note || null, unitLabel || null, unitScale || null);
-    return readSavedMeal(db, userId, lastInsertRowid);
+    const insert = prepareMealInsert(db, mealInsertColumnsWithUnit);
+    const id = insert({
+      user_id: userId,
+      date,
+      meal_type: mealType,
+      food_id: foodId || null,
+      recipe_id: recipeId || null,
+      servings: finalServings,
+      ...macroColumns(roundMacros(macros, 'stored')),
+      note: note || null,
+      unit_label: unitLabel || null,
+      unit_scale: unitScale || null,
+    });
+    return readSavedMeal(db, userId, id);
   })();
 }
 
 export function quickAddMeal(db: Database.Database, userId: number, input: QuickMealInput): StoredMeal {
   return db.transaction(() => {
     const { date, mealType, name } = input;
-    const { calories, carbsG, proteinG, fatG } = manualMacros(input);
-    const { lastInsertRowid } = db.prepare(`
-      INSERT INTO meal_logs (user_id, date, meal_type, servings, calories, carbs_g, protein_g, fat_g, note)
-      VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)
-    `).run(userId, date, mealType, calories, carbsG, proteinG, fatG, name || null);
+    const insert = prepareMealInsert(db, mealInsertColumns);
+    const id = insert({
+      user_id: userId,
+      date,
+      meal_type: mealType,
+      food_id: null,
+      recipe_id: null,
+      servings: 1,
+      ...macroColumns(manualMacros(input)),
+      note: name || null,
+    });
     return requireMeal(db.prepare<[number, number | bigint], StoredMeal>(`
       SELECT * FROM meal_logs WHERE user_id = ? AND id = ?
-    `).get(userId, lastInsertRowid));
+    `).get(userId, id));
   })();
 }
 
@@ -205,12 +236,9 @@ export function copyMeals(db: Database.Database, userId: number, fromDate: strin
     `).all(userId, fromDate);
     if (source.length === 0) return null;
 
-    const insert = db.prepare<CopySource & { user_id: number; date: string }>(`
-      INSERT INTO meal_logs (user_id, date, meal_type, food_id, recipe_id, servings, calories, carbs_g, protein_g, fat_g, note)
-      VALUES (@user_id, @date, @meal_type, @food_id, @recipe_id, @servings, @calories, @carbs_g, @protein_g, @fat_g, @note)
-    `);
+    const insert = prepareMealInsert(db, mealInsertColumns);
     for (const meal of source) {
-      insert.run({ ...meal, user_id: userId, date: toDate });
+      insert({ ...meal, user_id: userId, date: toDate });
     }
 
     return source.length;

@@ -154,7 +154,10 @@ it.each([
   expect(await meals(date, otherToken)).toEqual(otherBefore);
 });
 
-it('preserves the destination when the second copy insert fails and can retry', async () => {
+it.each([
+  { fault: 'aborts', action: "RAISE(ABORT, 'injected second copy insert failure')" },
+  { fault: 'skips', action: 'RAISE(IGNORE)' },
+])('preserves the destination when SQLite $fault the second copy insert and can retry', async ({ action }) => {
   await log({ date, mealType: 'breakfast', foodId: 10, servings: 1.25, unitLabel: 'cup', unitScale: 2.5 });
   await log({ date, mealType: 'lunch', calories: 75.22, note: 'Packed lunch' });
   await log({ date: nextDate, mealType: 'snack', calories: 50 });
@@ -170,14 +173,11 @@ it('preserves the destination when the second copy insert fails and can retry', 
     WHEN NEW.date = '${nextDate}' AND (
       SELECT COUNT(*) FROM meal_logs WHERE user_id = NEW.user_id AND date = NEW.date
     ) = 2
-    BEGIN SELECT RAISE(ABORT, 'injected second copy insert failure'); END;
+    BEGIN SELECT ${action}; END;
   `);
-  const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+  vi.spyOn(console, 'error').mockImplementation(() => {});
   const copy = { fromDate: date, toDate: nextDate };
   expect(await json('POST', '/copy', copy)).toEqual({ status: 500, body: { error: 'Failed to copy meals' } });
-  expect(error).toHaveBeenCalledWith('Copy meals error:', expect.objectContaining({
-    message: 'injected second copy insert failure',
-  }));
   expect(await meals(nextDate)).toEqual(destination);
   expect(await meals()).toEqual(source);
   expect(await meals(nextDate, otherToken)).toEqual(otherDestination);
