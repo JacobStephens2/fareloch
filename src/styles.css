@@ -880,6 +880,22 @@ input, button, select, textarea {
 }
 
 /* ===== FOOD LIST ===== */
+.log-food-heading {
+  flex: 1;
+  min-width: 0;
+}
+
+.log-food-summary {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+
+.log-food-done {
+  min-height: 44px;
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
 .food-list {
   display: flex;
   flex-direction: column;
@@ -895,6 +911,18 @@ input, button, select, textarea {
   border-radius: var(--radius-sm);
 }
 .food-item:hover { background: var(--surface-low); }
+
+.quick-log-button {
+  flex: 0 0 44px;
+  height: 44px;
+  color: var(--primary);
+  background: var(--surface-low);
+}
+
+.quick-log-button[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: wait;
+}
 
 /* Spacing between food items instead of borders */
 .food-item + .food-item {

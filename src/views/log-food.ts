@@ -6,14 +6,20 @@ import { mountLogFood } from './log-food-session';
 export function logFoodView() {
   const params = getQueryParams();
   const mealType = acceptedMealType(params.meal);
-  const date = params.date || toLocalDateStr();
+  const date = acceptedDate(params.date);
 
   return {
     html: `
       <div class="page log-page">
         <header class="page-header">
           <button id="back-btn" class="btn-icon">&larr;</button>
-          <h1>Add to ${capitalize(mealType)}</h1>
+          <div class="log-food-heading">
+            <h1>Add to ${capitalize(mealType)}</h1>
+            <p class="log-food-summary" role="status">
+              <span id="log-food-count">0 entries added</span><span id="quick-log-feedback"></span>
+            </p>
+          </div>
+          <button id="log-food-done" type="button" class="btn btn-primary log-food-done">Done</button>
         </header>
 
         <div class="search-bar">
@@ -67,6 +73,14 @@ export function logFoodView() {
       setCleanup(mountLogFood(root, date, mealType));
     },
   };
+}
+
+function acceptedDate(value: string | undefined): string {
+  if (value && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const parsed = new Date(`${value}T00:00:00Z`);
+    if (!Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value) return value;
+  }
+  return toLocalDateStr();
 }
 
 function acceptedMealType(value: string | undefined): MealType {

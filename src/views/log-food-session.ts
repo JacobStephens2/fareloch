@@ -1,5 +1,6 @@
-import { foods as foodsApi, recipes as recipesApi } from '../api';
+import { foods as foodsApi, meals, recipes as recipesApi } from '../api';
 import { navigate } from '../router';
+import { state } from '../state';
 import { mountFoodSearch, mountSavedFoodList } from '../food-search-session';
 import { mountMealAddSession } from './meal-add-session';
 import { mountLogFoodFormSession } from './log-food-form-session';
@@ -17,10 +18,16 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
   let disposeScanner: (() => void) | undefined;
   let activeTab = 'search';
   let tabRevision = 0;
+  let addedEntries = 0;
+  let pendingWrites = 0;
+  let finishing = false;
+  const failedWritesWhileFinishing = new Map<string | symbol, string>();
+  const pendingQuickLogs = new Set<string>();
+  const routeHash = window.location.hash;
   const find = <T extends HTMLElement = HTMLElement>(id: string) => root.querySelector<T>(`#${id}`)!;
-  const { isLive, signal, dispose } = createMountedLifetime(root, {
+  const { isLive: isMounted, signal, dispose } = createMountedLifetime(root, {
     ownedNodes: [...root.querySelectorAll(
-      '#back-btn, #food-search, .tab, #tab-content, #scan-btn, #scanner-close, #scanner-container, #scanner-video, #food-detail-modal, #modal-food-name, #modal-close, #modal-body',
+      '#back-btn, #log-food-done, #log-food-count, #quick-log-feedback, #food-search, .tab, #tab-content, #scan-btn, #scanner-close, #scanner-container, #scanner-video, #food-detail-modal, #modal-food-name, #modal-close, #modal-body',
     )],
     cleanup: () => {
       ++tabRevision;
@@ -32,6 +39,7 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
       disposeScanner?.();
     },
   });
+  const isLive = () => isMounted() && window.location.hash === routeHash;
   if (!isLive()) return dispose;
 
   function on<K extends keyof HTMLElementEventMap>(element: Element | null, type: K, handler: (event: HTMLElementEventMap[K]) => void) {
@@ -64,6 +72,62 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
 
   // Back button
   on(find('back-btn'), 'click', () => navigate('#/'));
+  const done = find<HTMLButtonElement>('log-food-done');
+  on(done, 'click', () => {
+    if (finishing) return;
+    finishing = true;
+    if (pendingWrites > 0) {
+      done.disabled = true;
+      done.textContent = 'Saving…';
+    }
+    finishWhenReady();
+  });
+
+  function finishWhenReady() {
+    if (!finishing || pendingWrites !== 0 || !isLive()) return;
+    state.selectedDate = date;
+    if (failedWritesWhileFinishing.size) {
+      const failures = [...failedWritesWhileFinishing.values()].join(' ');
+      state.mealLogNotice = `${failures} Open Log Food to retry.`;
+    }
+    navigate('#/');
+  }
+
+  async function recordEntry(key: string | symbol, write: () => Promise<unknown>, failureMessage: string) {
+    pendingWrites++;
+    try {
+      await write();
+      failedWritesWhileFinishing.delete(key);
+      if (isLive()) {
+        addedEntries++;
+        find('log-food-count').textContent = `${addedEntries} ${addedEntries === 1 ? 'entry' : 'entries'} added`;
+      }
+    } catch (error) {
+      if (finishing && isLive()) failedWritesWhileFinishing.set(key, failureMessage);
+      throw error;
+    } finally {
+      pendingWrites--;
+      finishWhenReady();
+    }
+  }
+
+  async function quickLog(kind: 'food' | 'recipe', { id, name }: Food | Recipe) {
+    const key = `${kind}:${id}`;
+    if (pendingQuickLogs.has(key)) return;
+    pendingQuickLogs.add(key);
+    const feedback = find('quick-log-feedback');
+    const identity = kind === 'food' ? { foodId: id } : { recipeId: id };
+    const failureMessage = `Could not add ${name}.`;
+    try {
+      feedback.textContent = '';
+      await recordEntry(key, () => meals.log({ date, mealType, ...identity, servings: 1 }), failureMessage);
+      if (isLive()) feedback.textContent = ` · Added ${name}.`;
+    } catch {
+      if (isLive()) feedback.textContent = ` · ${failureMessage} Use + to retry.`;
+    } finally {
+      pendingQuickLogs.delete(key);
+    }
+  }
 
   // Tab switching
   root.querySelectorAll('.tab').forEach((tab) => {
@@ -82,39 +146,61 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
         content.replaceChildren(host);
         disposeRecipeList = mountRecipeList(host, {
           kind: 'meal', read: recipesApi.list, onSelect: showRecipeAddModal, isParentLive: isLive,
+          onQuickLog: recipe => quickLog('recipe', recipe),
         });
       } else if (activeTab === 'recent' || activeTab === 'custom') {
         showSavedFoodList(activeTab, current);
-      } else if (activeTab === 'quick') showForm({ kind: 'quick', date, mealType, isParentLive: isLive, onSaved: () => {
-        if (isLive()) navigate('#/');
-      } });
+      } else if (activeTab === 'quick') showQuickAdd();
     });
   });
+
+  function showQuickAdd() {
+    const key = Symbol();
+    showForm({
+      kind: 'quick', date, mealType, isParentLive: isLive,
+      quickLog: data => recordEntry(key, () => meals.quickLog(data), 'Could not save a Quick Add entry.'),
+      onSaved: showQuickAdd,
+    });
+  }
 
   function showSavedFoodList(kind: 'recent' | 'custom', current: number) {
     if (!isLive()) return;
     disposeSavedFoodList?.();
     disposeForm?.();
+    disposeForm = undefined;
     const host = document.createElement('div');
     content.replaceChildren(host);
+    const actions = {
+      onSelect: showAddModal,
+      onQuickLog: (food: Food) => quickLog('food', food),
+      isParentLive: isLive,
+    };
     disposeSavedFoodList = mountSavedFoodList(host, kind === 'recent'
-      ? { kind, read: foodsApi.recent, onSelect: showAddModal, isParentLive: isLive }
-      : { kind, read: foodsApi.custom, onSelect: showAddModal, isParentLive: isLive, onCreate: () => showForm({
-        kind: 'custom', mealType, isParentLive: isLive, onCreated: showAddModal,
-        onCancel: () => {
-          if (isLive() && current === tabRevision) showSavedFoodList(kind, current);
-        },
-      }) });
+      ? { ...actions, kind, read: foodsApi.recent }
+      : { ...actions, kind, read: foodsApi.custom, onCreate: () => {
+        const restoreList = () => {
+          if (isLive() && current === tabRevision && (!disposeForm || disposeForm === original)) showSavedFoodList(kind, current);
+        };
+        const original = showForm({
+          kind: 'custom', mealType, isParentLive: isLive,
+          onCreated: food => {
+            restoreList();
+            showAddModal(food);
+          },
+          onCancel: restoreList,
+        });
+      } });
   }
 
   async function lookupBarcode(code: string) {
     if (!isLive()) return;
-    const content = find('tab-content')!;
+    ++tabRevision;
     content.innerHTML = '<div class="loading-spinner">Looking up barcode...</div>';
 
     try {
       const { food } = await foodsApi.barcode(code);
       if (!isLive()) return;
+      ++tabRevision;
       showAddModal(food);
       const found = document.createElement('p');
       found.className = 'text-muted';
@@ -122,6 +208,7 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
       content.replaceChildren(found);
     } catch {
       if (!isLive()) return;
+      ++tabRevision;
       const missing = document.createElement('p');
       missing.className = 'form-error';
       missing.append('No product found for barcode ', document.createTextNode(code));
@@ -140,23 +227,16 @@ export function mountLogFood(root: HTMLElement, date: string, mealType: MealType
   function showMealAdd(selection: Parameters<typeof mountMealAddSession>[1]) {
     if (!isLive()) return;
     disposeMealAdd?.();
-    disposeMealAdd = mountMealAddSession(find('food-detail-modal'), selection, date, mealType, isLive, () => {
-      if (!isLive()) return;
-      disposeMealAdd?.();
-      closeModal();
-      navigate('#/');
-    });
+    const { name } = selection.kind === 'food' ? selection.food : selection.recipe;
+    const key = Symbol();
+    disposeMealAdd = mountMealAddSession(find('food-detail-modal'), selection, date, mealType, isLive,
+      data => recordEntry(key, () => meals.log(data), `Could not add ${name}.`));
   }
 
   function showForm(options: Parameters<typeof mountLogFoodFormSession>[1]) {
     if (!isLive()) return;
     disposeForm?.();
-    disposeForm = mountLogFoodFormSession(content, options);
-  }
-
-  function closeModal() {
-    if (!isLive()) return;
-    find('food-detail-modal')?.classList.add('hidden');
+    return disposeForm = mountLogFoodFormSession(content, options);
   }
 
   session.setActive(true);

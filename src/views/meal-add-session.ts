@@ -1,4 +1,4 @@
-import { meals } from '../api';
+import type { meals } from '../api';
 import { createMountedLifetime } from '../mounted-lifetime';
 import type { Food, MealType, Recipe } from '../types';
 import { roundMacros, scaleMacros } from '../../server/src/nutrition';
@@ -6,14 +6,14 @@ import { mountFoodQuantitySelection } from './food-quantity-selection';
 
 type MealSelection = { kind: 'food'; food: Food } | { kind: 'recipe'; recipe: Recipe };
 
-// Local controls retire together; an accepted write still notifies its Log Food owner.
+// Local controls retire together; accepted writes belong to the Log Food session.
 export function mountMealAddSession(
   modal: HTMLElement,
   selection: MealSelection,
   date: string,
   mealType: MealType,
   isParentLive: () => boolean,
-  onSaved: () => void,
+  log: (data: Parameters<typeof meals.log>[0]) => Promise<unknown>,
 ): () => void {
   if (!modal.isConnected || !isParentLive()) return () => {};
   const title = modal.querySelector<HTMLElement>('#modal-food-name')!;
@@ -63,11 +63,12 @@ export function mountMealAddSession(
     return lifetime.isLive();
   }
   const eventOptions = { signal: lifetime.signal };
-  close.addEventListener('click', () => {
+  function closeModal() {
     if (!isLive()) return;
     lifetime.dispose();
     modal.classList.add('hidden');
-  }, eventOptions);
+  }
+  close.addEventListener('click', closeModal, eventOptions);
 
   let readAmount: () => { servings: number; unitLabel?: string; unitScale?: number } | undefined;
   if (selection.kind === 'food') {
@@ -115,7 +116,7 @@ export function mountMealAddSession(
     add.disabled = true;
     add.textContent = 'Adding...';
     try {
-      await meals.log(payload);
+      await log(payload);
     } catch {
       if (!isLive()) return;
       pending = false;
@@ -123,7 +124,7 @@ export function mountMealAddSession(
       add.textContent = 'Failed - Retry';
       return;
     }
-    onSaved();
+    closeModal();
   }, eventOptions);
 
   if (isLive()) modal.classList.remove('hidden');

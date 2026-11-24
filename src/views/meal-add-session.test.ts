@@ -39,7 +39,10 @@ async function selection(kind: Kind, name: string = kind) {
 
 function mount(value: Awaited<ReturnType<typeof selection>>, isParentLive = () => true, modal = find('food-detail-modal')) {
   const saved = vi.fn();
-  const dispose = mountMealAddSession(modal, value, date, 'dinner', isParentLive, saved);
+  const dispose = mountMealAddSession(modal, value, date, 'dinner', isParentLive, async data => {
+    await meals.log(data);
+    saved();
+  });
   disposers.push(dispose);
   return { saved, dispose };
 }

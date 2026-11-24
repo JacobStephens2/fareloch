@@ -215,3 +215,31 @@ it.each(['success', 'failure'])('barcode lookup %s is silent after raw parent de
   expect(root.outerHTML).toBe(before);
   expect(barcode).toHaveBeenCalledTimes(1);
 });
+
+it('late Custom Food creation preserves scanner feedback after replacing its form', async () => {
+  const pending = deferred<{ food: ReturnType<typeof food> }>();
+  create.mockReturnValueOnce(pending.promise);
+  click('[data-tab="custom"]');
+  await settle();
+  click('#create-food-btn');
+  const form = document.querySelector<HTMLFormElement>('#create-food-form')!;
+  const name = form.querySelector<HTMLInputElement>('#cf-name')!;
+  const carbs = form.querySelector<HTMLInputElement>('#cf-carbs')!;
+  name.value = 'New apple';
+  carbs.value = '10';
+  carbs.dispatchEvent(new Event('input'));
+  form.dispatchEvent(new Event('submit', { cancelable: true }));
+  expect(create).toHaveBeenCalledOnce();
+
+  click('#scan-btn');
+  await settle();
+  adapter.instances[0].decode('captured-code');
+  await settle();
+  const content = document.querySelector('#tab-content')!;
+  expect(content.textContent).toBe('Found: Scanned apple');
+
+  pending.resolve({ food: food('New apple') });
+  await settle();
+  expect(document.querySelector('#modal-food-name')!.textContent).toBe('New apple');
+  expect(content.textContent).toBe('Found: Scanned apple');
+});
