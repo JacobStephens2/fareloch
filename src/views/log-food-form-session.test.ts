@@ -20,7 +20,7 @@ function mount(kind: Kind, isParentLive = () => true, host = find('#content')) {
   const created = vi.fn();
   const canceled = vi.fn();
   const dispose = mountLogFoodFormSession(host, kind === 'quick'
-    ? { kind, date, mealType: 'lunch', isParentLive, onSaved: saved }
+    ? { kind, date, mealType: 'lunch', isParentLive, quickLog: meals.quickLog, onSaved: saved }
     : { kind, mealType: 'lunch', isParentLive, onCreated: created, onCancel: canceled });
   disposers.push(dispose);
   return {
@@ -321,7 +321,7 @@ it.each((['quick', 'custom'] as const).flatMap(kind =>
   await settle();
   expect(current.form.outerHTML).toBe(old);
   expect(document.body.innerHTML).toBe(successor);
-  expect(kind === 'quick' ? current.saved : current.created).toHaveBeenCalledTimes(outcome === 'success' ? 1 : 0);
+  expect(kind === 'quick' ? current.saved : current.created).toHaveBeenCalledTimes(kind === 'custom' && outcome === 'success' ? 1 : 0);
   submit(current.form);
   expect(network).toHaveBeenCalledOnce();
 });

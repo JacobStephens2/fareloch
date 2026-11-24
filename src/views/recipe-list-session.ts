@@ -1,14 +1,14 @@
 import type { Recipe } from '../types';
 import { textSpan } from './food-search-text';
 import { createMountedLifetime } from '../mounted-lifetime';
+import { appendQuickLogButton } from './quick-log-button';
 
 // Each connected, exclusively owned host gets one read and one permanent lifetime.
-export function mountRecipeList(host: HTMLElement, { kind, read, onSelect, isParentLive = () => true }: {
-  kind: 'manage' | 'meal';
+export function mountRecipeList(host: HTMLElement, { kind, read, onSelect, onQuickLog, isParentLive = () => true }: {
   read: () => Promise<{ recipes: Recipe[] }>;
   onSelect: (recipe: Recipe) => void;
   isParentLive?: () => boolean;
-}): () => void {
+} & ({ kind: 'manage'; onQuickLog?: never } | { kind: 'meal'; onQuickLog?: (recipe: Recipe) => Promise<void> })): () => void {
   const { isLive: isMounted, signal, dispose } = createMountedLifetime(host);
   const isLive = () => isMounted() && isParentLive();
 
@@ -44,9 +44,11 @@ export function mountRecipeList(host: HTMLElement, { kind, read, onSelect, isPar
           textSpan('macro-chip chip-fat', `${recipe.perServing.fatG}f`),
         );
         row.append(info, macros);
+        const isCurrent = () => isLive() && host.contains(row);
         row.addEventListener('click', () => {
-          if (isLive() && host.contains(row)) onSelect(recipe);
+          if (isCurrent()) onSelect(recipe);
         }, { signal });
+        if (onQuickLog) appendQuickLogButton(row, recipe.name, () => onQuickLog(recipe), isCurrent, signal);
         host.append(row);
       }
     } catch {

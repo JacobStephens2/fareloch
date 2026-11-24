@@ -7,7 +7,12 @@ type FormOptions = {
   mealType: MealType;
   isParentLive: () => boolean;
 } & (
-  | { kind: 'quick'; date: string; onSaved: () => void }
+  | {
+      kind: 'quick';
+      date: string;
+      quickLog: (data: Parameters<typeof meals.quickLog>[0]) => Promise<unknown>;
+      onSaved: () => void;
+    }
   | { kind: 'custom'; onCreated: (food: Food) => void; onCancel: () => void }
 );
 
@@ -84,7 +89,7 @@ export function mountLogFoodFormSession(host: HTMLElement, options: FormOptions)
     let created: Food | undefined;
     try {
       if (options.kind === 'quick') {
-        await meals.quickLog({ date: options.date, mealType: options.mealType, name: name.value || undefined, ...values });
+        await options.quickLog({ date: options.date, mealType: options.mealType, name: name.value || undefined, ...values });
       } else {
         const result = await foods.create({
           name: name.value,
@@ -106,8 +111,11 @@ export function mountLogFoodFormSession(host: HTMLElement, options: FormOptions)
       return;
     }
     submission = 'succeeded';
-    if (options.kind === 'quick') options.onSaved();
-    else options.onCreated(created!);
+    if (options.kind === 'quick') {
+      if (!isLive()) return;
+      lifetime!.dispose();
+      options.onSaved();
+    } else options.onCreated(created!);
   }, { signal: lifetime.signal });
   return lifetime.dispose;
 }

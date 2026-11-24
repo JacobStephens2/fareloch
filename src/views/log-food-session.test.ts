@@ -275,7 +275,7 @@ it.each(['external', 'custom'] as const)('%s already submitted can finish across
   expect(window.location.hash).toBe('#/log?date=2026-04-01&meal=lunch');
 });
 
-it.each(['food', 'recipe', 'quick'] as const)('%s submission keeps its captured input and Dashboard return across live changes', async operation => {
+it.each(['food', 'recipe', 'quick'] as const)('%s submission counts in the original Log Food session across live changes', async operation => {
   const pending = deferred<typeof completion>();
   await begin(operation, pending);
   if (operation !== 'quick') change('servings-input', '9');
@@ -285,11 +285,13 @@ it.each(['food', 'recipe', 'quick'] as const)('%s submission keeps its captured 
   await settle();
   pending.resolve(completion);
   await settle();
-  expect(window.location.hash).toBe('#/');
+  expect(document.querySelector('#tab-content #create-food-btn')).not.toBeNull();
+  expect(window.location.hash).toBe('#/log?date=2026-04-01&meal=lunch');
+  expect(document.querySelector('[role="status"]')?.textContent).toContain('1 entry added');
   expect(window.alert).not.toHaveBeenCalled();
 });
 
-it.each(['food', 'recipe'] as const)('%s open form survives live query/tab changes and accepted success owns return after replacement', async operation => {
+it.each(['food', 'recipe'] as const)('%s late success leaves the successor quantity modal open', async operation => {
   const pending = deferred<typeof completion>();
   go('/log?date=2026-04-01&meal=lunch');
   vi.mocked(foods.recent).mockResolvedValue({ foods: [food('Saved apple')] });
@@ -309,10 +311,55 @@ it.each(['food', 'recipe'] as const)('%s open form survives live query/tab chang
   click('[data-tab="recipes"]');
   await settle();
   click('.food-item');
-  expect(document.querySelector('#add-food-btn')).not.toBe(original);
+  const successor = document.querySelector('#add-food-btn');
+  expect(successor).not.toBe(original);
   pending.resolve(completion);
   await settle();
-  expect(window.location.hash).toBe('#/');
+  expect(window.location.hash).toBe('#/log?date=2026-04-01&meal=lunch');
+  expect(document.querySelector('#food-detail-modal')!.classList.contains('hidden')).toBe(false);
+  expect(document.querySelector('#add-food-btn')).toBe(successor);
+  expect(document.querySelector('[role="status"]')?.textContent).toContain('1 entry added');
+});
+
+it('Quick Add starts a fresh form on every successful submission in the same session', async () => {
+  vi.mocked(meals.quickLog).mockResolvedValue(completion);
+  go('/log?date=2026-04-01&meal=lunch');
+  const root = document.querySelector('.log-page');
+  click('[data-tab="quick"]');
+  change('quick-name', 'First');
+  change('quick-cal', '120');
+  const original = document.querySelector('#quick-form');
+  submitForm('#quick-form');
+  await settle();
+  expect(window.location.hash).toBe('#/log?date=2026-04-01&meal=lunch');
+  expect(document.querySelector('.log-page')).toBe(root);
+  expect(document.querySelector('#quick-form')).not.toBe(original);
+  expect(document.querySelector<HTMLInputElement>('#quick-name')!.value).toBe('');
+  expect(document.querySelector<HTMLInputElement>('#quick-cal')!.value).toBe('');
+  change('quick-name', 'Second');
+  change('quick-carbs', '10');
+  submitForm('#quick-form');
+  await settle();
+  expect(document.querySelector('[role="status"]')?.textContent).toContain('2 entries added');
+  expect(meals.quickLog).toHaveBeenNthCalledWith(2, {
+    date: '2026-04-01', mealType: 'lunch', name: 'Second', calories: 40, carbsG: 10, proteinG: 0, fatG: 0,
+  });
+});
+
+it('an older Quick Add success counts without resetting the replacement form', async () => {
+  const pending = deferred<typeof completion>();
+  await begin('quick', pending);
+  click('[data-tab="custom"]');
+  click('[data-tab="quick"]');
+  change('quick-name', 'Still drafting');
+  change('quick-cal', '110');
+  const replacement = document.querySelector('#quick-form');
+  pending.resolve(completion);
+  await settle();
+  expect(document.querySelector('#quick-form')).toBe(replacement);
+  expect(document.querySelector<HTMLInputElement>('#quick-name')!.value).toBe('Still drafting');
+  expect(document.querySelector<HTMLInputElement>('#quick-cal')!.value).toBe('110');
+  expect(document.querySelector('[role="status"]')?.textContent).toContain('1 entry added');
 });
 
 it.each(['external', 'custom', 'food', 'recipe', 'quick'] as const)('%s retained controls are inert after disposal or reconnection following observer delivery', async operation => {

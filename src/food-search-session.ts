@@ -2,6 +2,7 @@ import type { ExternalFood, Food } from './types';
 import type { foods as foodOperations } from './api';
 import { textSpan } from './views/food-search-text';
 import { createMountedLifetime } from './mounted-lifetime';
+import { appendQuickLogButton } from './views/quick-log-button';
 
 export interface FoodSearchResult {
   foods: Food[];
@@ -206,6 +207,7 @@ export function mountFoodSearch(root: HTMLElement, { kind, foods, onSelect, onQu
 export function mountSavedFoodList(host: HTMLElement, options: {
   read: () => Promise<{ foods: Food[] }>;
   onSelect: (food: Food) => void;
+  onQuickLog?: (food: Food) => Promise<void>;
   isParentLive?: () => boolean;
 } & ({ kind: 'recent' } | { kind: 'custom'; onCreate: () => void })): () => void {
   const { isLive: isMounted, signal, dispose } = createMountedLifetime(host);
@@ -240,9 +242,12 @@ export function mountSavedFoodList(host: HTMLElement, options: {
       list.className = 'food-list';
       for (const food of foods) {
         const row = resultRow(food, 'meal', false);
+        const isCurrent = () => isLive() && host.contains(row);
         row.addEventListener('click', () => {
-          if (isLive() && host.contains(row)) options.onSelect(food);
+          if (isCurrent()) options.onSelect(food);
         }, { signal });
+        const { onQuickLog } = options;
+        if (onQuickLog) appendQuickLogButton(row, food.name, () => onQuickLog(food), isCurrent, signal);
         list.append(row);
       }
       host.append(list);

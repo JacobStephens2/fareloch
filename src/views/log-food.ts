@@ -13,7 +13,13 @@ export function logFoodView() {
       <div class="page log-page">
         <header class="page-header">
           <button id="back-btn" class="btn-icon">&larr;</button>
-          <h1>Add to ${capitalize(mealType)}</h1>
+          <div class="log-food-heading">
+            <h1>Add to ${capitalize(mealType)}</h1>
+            <p class="log-food-summary" role="status">
+              <span id="log-food-count">0 entries added</span><span id="quick-log-feedback"></span>
+            </p>
+          </div>
+          <button id="log-food-done" type="button" class="btn btn-primary btn-sm">Done</button>
         </header>
 
         <div class="search-bar">
