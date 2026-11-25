@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { acceptedFoodId } from './food-owner.js';
 
 interface RecipeInput {
   name?: string | null;
@@ -38,14 +39,21 @@ function insertRecipe(db: Database.Database, recipe: RecipeValues) {
   `).run(recipe).lastInsertRowid;
 }
 
-function ingredientValues(ingredients: unknown): IngredientValues[] {
+function ingredientValues(db: Database.Database, userId: number, ingredients: unknown): IngredientValues[] {
   if (!Array.isArray(ingredients)) return [];
-  return ingredients.map(ingredient => ({
-    food_id: ingredient.foodId,
-    servings: ingredient.servings || 1,
-    qty: ingredient.qty ?? null,
-    unit_label: ingredient.unitLabel ?? null,
-  }));
+  const values: IngredientValues[] = [];
+  for (const ingredient of ingredients) {
+    // Another caller's food is not linkable; a missing id still reaches the foreign key.
+    const foodId = acceptedFoodId(db, ingredient.foodId, userId);
+    if (foodId == null) continue;
+    values.push({
+      food_id: foodId,
+      servings: ingredient.servings || 1,
+      qty: ingredient.qty ?? null,
+      unit_label: ingredient.unitLabel ?? null,
+    });
+  }
+  return values;
 }
 
 function insertIngredients(db: Database.Database, recipeId: number | bigint, ingredients: IngredientValues[]) {
@@ -71,7 +79,7 @@ export function createRecipe(db: Database.Database, userId: number, input: Recip
       manual_protein_g: input.manualProteinG ?? null,
       manual_fat_g: input.manualFatG ?? null,
     });
-    insertIngredients(db, id, ingredientValues(input.ingredients));
+    insertIngredients(db, id, ingredientValues(db, userId, input.ingredients));
     return { id, name: input.name, totalServings };
   })();
 }
@@ -96,7 +104,7 @@ export function updateRecipe(db: Database.Database, userId: number, recipeId: st
 
     if (Array.isArray(input.ingredients)) {
       db.prepare('DELETE FROM recipe_ingredients WHERE recipe_id = ?').run(recipeId);
-      insertIngredients(db, recipe.id, ingredientValues(input.ingredients));
+      insertIngredients(db, recipe.id, ingredientValues(db, userId, input.ingredients));
     }
     return { saved: true };
   })();
@@ -108,8 +116,10 @@ export function copyRecipe(db: Database.Database, userId: number, recipeId: stri
     if (!recipe) return null;
 
     const id = insertRecipe(db, { ...recipe, name: recipe.name + ' (Copy)' });
-    const ingredients = db.prepare('SELECT * FROM recipe_ingredients WHERE recipe_id = ?').all(recipe.id) as IngredientValues[];
+    const ingredients = (db.prepare('SELECT * FROM recipe_ingredients WHERE recipe_id = ?').all(recipe.id) as IngredientValues[])
+      .filter(ingredient => acceptedFoodId(db, ingredient.food_id, userId) != null);
     // Stored values bypass create/update defaults, including legacy zero servings.
+    // A copied recipe does not keep a link to another caller's food.
     insertIngredients(db, id, ingredients);
     return { id };
   })();

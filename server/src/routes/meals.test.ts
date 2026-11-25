@@ -40,7 +40,7 @@ beforeEach(() => {
       VALUES (1, 'meals@example.com', 'hash', 'Meals'),
              (2, 'other@example.com', 'hash', 'Other');
     INSERT INTO foods (id, user_id, name, brand, serving_size, serving_unit, calories, carbs_g, protein_g, fat_g)
-      VALUES (10, 2, 'Oats, "rolled"', 'Mill "A"', 40, 'g', 80.32, 13.24, 4.46, 1.29);
+      VALUES (10, 1, 'Oats, "rolled"', 'Mill "A"', 40, 'g', 80.32, 13.24, 4.46, 1.29);
     INSERT INTO recipes (id, user_id, name, total_servings, manual_calories, manual_carbs_g, manual_protein_g, manual_fat_g)
       VALUES (20, 1, 'Oat bake', 3, NULL, NULL, NULL, NULL),
              (21, 2, 'Other recipe', 2, 200.66, 32.22, 12.36, 4.88);
@@ -101,7 +101,7 @@ it('rolls back an edit when SQLite fails during its joined readback and can retr
   // Shadow the Food join with a projection that fails only once the new value is visible.
   getDb().exec(`
     CREATE TEMP VIEW foods AS
-    SELECT f.id, f.brand, f.serving_size, f.serving_unit,
+    SELECT f.id, f.user_id, f.brand, f.serving_size, f.serving_unit,
            CASE WHEN EXISTS (SELECT 1 FROM meal_logs WHERE user_id = 1 AND calories = 200.4)
                 THEN json('invalid') ELSE f.name END AS name
     FROM main.foods f;

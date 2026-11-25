@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { acceptedFoodId, foodVisibleToCaller } from './food-owner.js';
 import { macrosOf, recipePerServing, roundMacros, scaleMacros, type MacroRow, type Macros, type RecipeRow } from './nutrition.js';
 import { recipeIngredientRows } from './recipe-ingredients.js';
 
@@ -75,9 +76,11 @@ const mealInsertColumns = [
 const mealInsertColumnsWithUnit = [...mealInsertColumns, 'unit_label', 'unit_scale'] as const;
 type CopySource = Omit<Pick<StoredMeal, typeof mealInsertColumns[number]>, 'user_id' | 'date'>;
 
+// The joined food is present only when the caller owns it or it has no owner.
+// Queries using these joins bind the caller id for the food predicate first.
 const mealJoins = `
   FROM meal_logs m
-  LEFT JOIN foods f ON m.food_id = f.id
+  LEFT JOIN foods f ON m.food_id = f.id AND ${foodVisibleToCaller('f')}
   LEFT JOIN recipes r ON m.recipe_id = r.id
 `;
 
@@ -93,10 +96,10 @@ function requireMeal<Meal extends StoredMeal>(meal: Meal | undefined): Meal {
 }
 
 function readSavedMeal(db: Database.Database, userId: number, id: MealId): JoinedMeal {
-  return requireMeal(db.prepare<[number, MealId], JoinedMeal>(`
+  return requireMeal(db.prepare<[number, number, MealId], JoinedMeal>(`
     ${joinedMeals}
     WHERE m.user_id = ? AND m.id = ?
-  `).get(userId, id));
+  `).get(userId, userId, id));
 }
 
 function manualMacros({ calories, carbsG, proteinG, fatG }: MealMacrosInput): Macros {
@@ -120,7 +123,7 @@ function prepareMealInsert<Column extends keyof StoredMeal>(db: Database.Databas
 }
 
 export function mealsForDate(db: Database.Database, userId: number, date: string): JoinedMeal[] {
-  return db.prepare<[number, string], JoinedMeal>(`
+  return db.prepare<[number, number, string], JoinedMeal>(`
     ${joinedMeals}
     WHERE m.user_id = ? AND m.date = ?
     ORDER BY
@@ -131,7 +134,7 @@ export function mealsForDate(db: Database.Database, userId: number, date: string
         WHEN 'snack' THEN 4
       END,
       m.created_at
-  `).all(userId, date);
+  `).all(userId, userId, date);
 }
 
 export function mealTotals(db: Database.Database, userId: number, startDate: string, endDate: string): MealTotals[] {
@@ -154,15 +157,24 @@ export function logMeal(db: Database.Database, userId: number, input: MealLogInp
     const finalServings = servings || 1;
     let macros = manualMacros(input);
 
+    // Macros and the stored food id come from a food the caller owns, or from a food with no owner.
+    let linkedFoodId: number | null = null;
     if (foodId) {
-      const food = db.prepare<[number], MacroRow>('SELECT * FROM foods WHERE id = ?').get(foodId);
-      if (food) macros = scaleMacros(macrosOf(food), finalServings);
+      const food = db.prepare<[number, number], MacroRow>(
+        `SELECT * FROM foods WHERE id = ? AND ${foodVisibleToCaller()}`,
+      ).get(foodId, userId);
+      if (food) {
+        macros = scaleMacros(macrosOf(food), finalServings);
+        linkedFoodId = Number(foodId);
+      } else {
+        linkedFoodId = acceptedFoodId(db, foodId, userId);
+      }
     }
     if (recipeId) {
       const recipe = db.prepare<[number, number], RecipeRow & { id: number }>(
         'SELECT * FROM recipes WHERE id = ? AND user_id = ?',
       ).get(recipeId, userId);
-      if (recipe) macros = scaleMacros(recipePerServing(recipe, recipeIngredientRows(db, recipe)), finalServings);
+      if (recipe) macros = scaleMacros(recipePerServing(recipe, recipeIngredientRows(db, recipe, userId)), finalServings);
     }
 
     const insert = prepareMealInsert(db, mealInsertColumnsWithUnit);
@@ -170,7 +182,7 @@ export function logMeal(db: Database.Database, userId: number, input: MealLogInp
       user_id: userId,
       date,
       meal_type: mealType,
-      food_id: foodId || null,
+      food_id: linkedFoodId,
       recipe_id: recipeId || null,
       servings: finalServings,
       ...macroColumns(roundMacros(macros, 'stored')),
@@ -238,7 +250,8 @@ export function copyMeals(db: Database.Database, userId: number, fromDate: strin
 
     const insert = prepareMealInsert(db, mealInsertColumns);
     for (const meal of source) {
-      insert({ ...meal, user_id: userId, date: toDate });
+      // A copied day does not keep a link to another caller's food; stored macros stay.
+      insert({ ...meal, food_id: acceptedFoodId(db, meal.food_id, userId), user_id: userId, date: toDate });
     }
 
     return source.length;
@@ -246,11 +259,11 @@ export function copyMeals(db: Database.Database, userId: number, fromDate: strin
 }
 
 export function mealCsvRows(db: Database.Database, userId: number): MealCsvRow[] {
-  return db.prepare<[number], MealCsvRow>(`
+  return db.prepare<[number, number], MealCsvRow>(`
     SELECT m.date, m.meal_type, m.servings, m.calories, m.carbs_g, m.protein_g, m.fat_g, m.note,
            f.name as food_name, f.brand as food_brand, r.name as recipe_name
     ${mealJoins}
     WHERE m.user_id = ?
     ORDER BY m.date DESC, m.meal_type
-  `).all(userId);
+  `).all(userId, userId);
 }
