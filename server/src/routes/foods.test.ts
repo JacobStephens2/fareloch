@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once } from 'node:events';
 import express from 'express';
-import { afterAll, beforeAll, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { signToken } from '../middleware/auth.js';
 import { getDb, initDb } from '../db.js';
 import foodRoutes from './foods.js';
@@ -30,6 +30,18 @@ const oats = {
 
 let server: Server;
 let port: number;
+
+beforeEach(() => {
+  vi.stubEnv('FATSECRET_CLIENT_ID', '');
+  vi.stubEnv('FATSECRET_CLIENT_SECRET', '');
+  vi.stubEnv('USDA_API_KEY', '');
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
 
 beforeAll(async () => {
   const dir = mkdtempSync(join(tmpdir(), 'fareloch-foods-'));
@@ -110,13 +122,42 @@ function product(name: string): Response {
 
 const realFetch = globalThis.fetch.bind(globalThis);
 
-function stubUpstream(product: () => Response) {
+function stubUpstream(product: (url: URL, init?: RequestInit) => Response) {
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
     if (url.startsWith('http://127.0.0.1')) return realFetch(input, init);
-    return product();
+    return product(new URL(url), init);
   }));
 }
+
+it('saved-only search returns matching caller foods without contacting external services', async () => {
+  const ada = addUser('saved-search-ada@example.com', 'Ada');
+  const grace = addUser('saved-search-grace@example.com', 'Grace');
+  const token = tokenFor(ada, 'saved-search-ada@example.com', 'Ada');
+  const saved = await postSave(token, { ...oats, name: 'Banana', brand: 'Repeat foods', sourceId: 'banana' });
+  await postSave(token, { ...oats, name: 'Unrelated oats' });
+  await postSave(tokenFor(grace, 'saved-search-grace@example.com', 'Grace'), {
+    ...oats, name: 'Private banana', sourceId: 'private-banana',
+  });
+  const upstreamCalls: string[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.startsWith('http://127.0.0.1')) return realFetch(input, init);
+    upstreamCalls.push(url);
+    return upstream({ products: [], foods: [] });
+  }));
+
+  for (const query of ['BANANA', 'repeat']) {
+    const response = await fetch(`http://127.0.0.1:${port}/api/foods/search?q=${query}&savedOnly=true`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ foods: [saved.data.food], external: [] });
+  }
+  const unsigned = await fetch(`http://127.0.0.1:${port}/api/foods/search?q=banana&savedOnly=true`);
+  expect(await unsigned.json()).toEqual({ foods: [], external: [] });
+  expect(upstreamCalls).toEqual([]);
+});
 
 it('refuses to save an external food without a signed-in caller', async () => {
   const missing = await postSave(null, oats);
@@ -269,4 +310,164 @@ it('caches a barcode food under the signed-in caller', async () => {
   expect(gracesCached.data.food.id).toBe(graces.data.food.id);
   expect(gracesCached.data.food.name).toBe('Different peas');
   expect(gracesCached.data.food.user_id).toBe(grace);
+});
+
+async function search(query: string, token: string | null = null) {
+  const response = await fetch(`http://127.0.0.1:${port}/api/foods/search?q=${encodeURIComponent(query)}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  return { status: response.status, data: await response.json() };
+}
+
+it('combines caller and unowned saved Foods with real external search candidates', async () => {
+  const ada = addUser('combined-ada@example.com', 'Ada');
+  const grace = addUser('combined-grace@example.com', 'Grace');
+  const token = tokenFor(ada, 'combined-ada@example.com', 'Ada');
+  const saved = await postSave(token, { ...oats, name: 'Combined saved oats', sourceId: 'combined' });
+  await postSave(tokenFor(grace, 'combined-grace@example.com', 'Grace'), {
+    ...oats, name: 'Combined private oats', sourceId: 'combined-private',
+  });
+  stubUpstream(() => product('Combined shared oats'));
+  await getBarcode('880000000001', null);
+  const shared = await getBarcode('880000000001', null);
+  const queries: (string | null)[] = [];
+  stubUpstream(url => {
+    if (url.hostname === 'world.openfoodfacts.org') {
+      queries.push(url.searchParams.get('search_terms'));
+      return upstream({ products: [{ product_name: 'Combined external oats', code: 'off-combined' }] });
+    }
+    queries.push(url.searchParams.get('query'));
+    return upstream({ foods: [{ description: 'Combined external oats', fdcId: 'usda-combined' }] });
+  });
+  expect(await search('  combined  ', token)).toEqual({ status: 200, data: {
+    foods: [saved.data.food, shared.data.food],
+    external: [
+      {
+        name: 'Combined external oats', brand: null, barcode: null, servingSize: 100, servingUnit: 'g',
+        calories: 0, carbsG: 0, proteinG: 0, fatG: 0, fiberG: 0, sugarG: 0,
+        source: 'usda', sourceId: 'usda-combined',
+      },
+      {
+        name: 'Combined external oats', brand: null, barcode: 'off-combined', servingSize: 100, servingUnit: 'g',
+        calories: 0, carbsG: 0, proteinG: 0, fatG: 0, fiberG: 0, sugarG: 0,
+        source: 'openfoodfacts', sourceId: 'off-combined',
+      },
+    ],
+  } });
+  expect(queries).toEqual(['combined', 'combined']);
+});
+
+it('returns only external candidates for unsigned search even when matching saved Foods exist', async () => {
+  const ada = addUser('unsigned-search@example.com', 'Ada');
+  await postSave(tokenFor(ada, 'unsigned-search@example.com', 'Ada'), {
+    ...oats, name: 'Unsigned oats', sourceId: 'unsigned',
+  });
+  stubUpstream(() => product('Unsigned oats'));
+  await getBarcode('880000000002', null);
+  stubUpstream(url => url.hostname === 'world.openfoodfacts.org'
+    ? upstream({ products: [{ product_name: 'Unsigned oats', code: 'unsigned-external' }] })
+    : upstream({ foods: [] }));
+  const response = await search('Unsigned');
+  expect(response.status).toBe(200);
+  expect(response.data.foods).toEqual([]);
+  expect(response.data.external).toEqual([{
+    name: 'Unsigned oats', brand: null, barcode: 'unsigned-external', servingSize: 100, servingUnit: 'g',
+    calories: 0, carbsG: 0, proteinG: 0, fatG: 0, fiberG: 0, sugarG: 0,
+    source: 'openfoodfacts', sourceId: 'unsigned-external',
+  }]);
+});
+
+it('bypasses upstream lookup on empty queries for signed and unsigned callers', async () => {
+  const ada = addUser('empty-search@example.com', 'Ada');
+  const calls: string[] = [];
+  stubUpstream(url => {
+    calls.push(String(url));
+    throw new Error('No upstream expected');
+  });
+  for (const token of [null, tokenFor(ada, 'empty-search@example.com', 'Ada')]) {
+    expect(await search('   ', token)).toEqual({ status: 200, data: { foods: [], external: [] } });
+    const response = await fetch(`http://127.0.0.1:${port}/api/foods/search`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ foods: [], external: [] });
+  }
+  expect(calls).toEqual([]);
+});
+
+it('preserves the distinct cold Open Food Facts barcode and warm persisted response shapes', async () => {
+  const calls: string[] = [];
+  stubUpstream(url => {
+    calls.push(String(url));
+    return upstream({ status: 1, product: {
+      product_name: 'Precise peas', serving_quantity: '40.5',
+      nutriments: { 'energy-kcal_serving': 90.56, proteins_serving: 6.123 },
+    } });
+  });
+  const cold = await getBarcode('880000000003', null);
+  expect(cold.status).toBe(200);
+  expect(cold.data.food).toEqual({
+    id: expect.any(Number), name: 'Precise peas', brand: null, barcode: '880000000003',
+    serving_size: 40.5, serving_unit: 'g', calories: 90.56, carbs_g: 0, protein_g: 6.123,
+    fat_g: 0, fiber_g: 0, sugar_g: 0, source: 'openfoodfacts', source_id: '880000000003',
+  });
+  const warm = await getBarcode('880000000003', null);
+  expect(warm).toEqual({ status: 200, data: { food: {
+    ...cold.data.food, user_id: null, measures: null, created_at: expect.any(String),
+  } } });
+  expect(calls).toHaveLength(1);
+});
+
+it('keeps FatSecret cold array measures and cached string measures with a shared search token', async () => {
+  vi.stubEnv('FATSECRET_CLIENT_ID', 'route-client');
+  vi.stubEnv('FATSECRET_CLIENT_SECRET', 'route-secret');
+  const calls: string[] = [];
+  let tokenRequests = 0;
+  stubUpstream((url, init) => {
+    calls.push(String(url));
+    if (url.hostname === 'oauth.fatsecret.com') {
+      tokenRequests++;
+      return upstream({ access_token: 'route-token', expires_in: 3600 });
+    }
+    if (url.hostname !== 'platform.fatsecret.com') return upstream({ status: 0 });
+    expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer route-token');
+    if (url.searchParams.get('method') === 'foods.search') return upstream({ foods: { food: [] } });
+    if (url.searchParams.get('method') === 'food.find_id_for_barcode') return upstream({ food_id: { value: 'fs-route' } });
+    return upstream({ food: {
+      food_id: 'fs-route', food_name: 'FatSecret beans', servings: { serving: {
+        serving_description: '1/2 cup', metric_serving_amount: '80', metric_serving_unit: 'g',
+        calories: '90.56', carbohydrate: '12.34', protein: '6.123', fat: '1.26', fiber: '4', sugar: '2',
+      } },
+    } });
+  });
+  expect(await search('beans')).toEqual({ status: 200, data: { foods: [], external: [] } });
+  const ada = addUser('fatsecret-cache@example.com', 'Ada');
+  const token = tokenFor(ada, 'fatsecret-cache@example.com', 'Ada');
+  const cold = await getBarcode('880000000004', token);
+  expect(cold).toEqual({ status: 200, data: { food: {
+    id: expect.any(Number), name: 'FatSecret beans', brand: null, barcode: '880000000004',
+    serving_size: 80, serving_unit: 'g', calories: 91, carbs_g: 12.3, protein_g: 6.1,
+    fat_g: 1.3, fiber_g: 4, sugar_g: 2, source: 'fatsecret', source_id: 'fs-route',
+    measures: [{ label: '1/2 cup', gramWeight: 80 }],
+  } } });
+  expect(tokenRequests).toBe(1);
+  calls.length = 0;
+  expect(await getBarcode('880000000004', token)).toEqual({ status: 200, data: { food: {
+    ...cold.data.food, user_id: ada, created_at: expect.any(String),
+    measures: '[{"label":"1/2 cup","gramWeight":80}]',
+  } } });
+  expect(calls).toEqual([]);
+});
+
+it('returns partial external search and barcode not-found responses on upstream failures', async () => {
+  stubUpstream(url => {
+    if (url.hostname === 'api.nal.usda.gov') return upstream({ foods: [{ description: 'Rescue oats', fdcId: 'rescue' }] });
+    throw new Error('provider offline');
+  });
+  const response = await search('Rescue');
+  expect(response.status).toBe(200);
+  expect(response.data.foods).toEqual([]);
+  expect(response.data.external).toHaveLength(1);
+  expect(response.data.external[0]).toMatchObject({ source: 'usda', sourceId: 'rescue' });
+  expect(await getBarcode('880000000005', null)).toEqual({ status: 404, data: { error: 'Product not found' } });
 });

@@ -1,6 +1,8 @@
 import { Router, Request, Response } from 'express';
 import { getDb } from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
+import { isWaistInches } from '../waist.js';
+import { saveWeight } from '../weight-mutations.js';
 
 const router = Router();
 
@@ -21,30 +23,18 @@ router.get('/', requireAuth, (req: Request, res: Response) => {
 router.post('/', requireAuth, (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const { date, weightLbs, notes, time } = req.body;
-    const timeVal = time || '';
+    const { date, weightLbs, notes, time, waistInches } = req.body;
     if (!date || !weightLbs) {
       res.status(400).json({ error: 'Date and weight are required' });
       return;
     }
-
-    // Upsert: if there's already a log for this date+time, update it
-    const existing = db.prepare('SELECT id FROM weight_logs WHERE user_id = ? AND date = ? AND time = ?').get(req.user!.userId, date, timeVal) as any;
-
-    if (existing) {
-      db.prepare('UPDATE weight_logs SET weight_lbs = ?, notes = ? WHERE id = ?').run(weightLbs, notes || null, existing.id);
-      const log = db.prepare('SELECT * FROM weight_logs WHERE id = ?').get(existing.id);
-      res.json({ log });
-    } else {
-      const result = db.prepare('INSERT INTO weight_logs (user_id, date, time, weight_lbs, notes) VALUES (?, ?, ?, ?, ?)').run(
-        req.user!.userId, date, timeVal, weightLbs, notes || null
-      );
-      const log = db.prepare('SELECT * FROM weight_logs WHERE id = ?').get(result.lastInsertRowid);
-      res.json({ log });
+    if (waistInches != null && !isWaistInches(waistInches)) {
+      res.status(400).json({ error: 'Waist must be a number between 20 and 60 inches' });
+      return;
     }
 
-    // Update user's current weight
-    db.prepare('UPDATE users SET current_weight_lbs = ? WHERE id = ?').run(weightLbs, req.user!.userId);
+    const log = saveWeight(db, req.user!.userId, { date, weightLbs, notes, time, waistInches });
+    res.json({ log });
   } catch (e) {
     console.error('Log weight error:', e);
     res.status(500).json({ error: 'Failed to log weight' });
@@ -65,12 +55,12 @@ router.delete('/:id', requireAuth, (req: Request, res: Response) => {
 // Export weight as CSV
 router.get('/export/csv', requireAuth, (req: Request, res: Response) => {
   const db = getDb();
-  const logs = db.prepare('SELECT date, time, weight_lbs, notes FROM weight_logs WHERE user_id = ? ORDER BY date DESC, time DESC').all(req.user!.userId) as any[];
+  const logs = db.prepare('SELECT date, time, weight_lbs, waist_inches, notes FROM weight_logs WHERE user_id = ? ORDER BY date DESC, time DESC').all(req.user!.userId) as any[];
 
-  const header = 'Date,Time,Weight(lbs),Notes';
+  const header = 'Date,Time,Weight(lbs),Waist(in),Notes';
   const rows = logs.map((l: any) => {
     const esc = (s: string | null) => s ? `"${s.replace(/"/g, '""')}"` : '';
-    return `${l.date},${l.time || ''},${l.weight_lbs},${esc(l.notes)}`;
+    return `${l.date},${l.time || ''},${l.weight_lbs},${l.waist_inches ?? ''},${esc(l.notes)}`;
   });
 
   res.setHeader('Content-Type', 'text/csv');

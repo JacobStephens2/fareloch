@@ -25,13 +25,26 @@ export function signToken(payload: AuthPayload): string {
   return jwt.sign(payload, getSecret(), { expiresIn: '30d' });
 }
 
-export function setTokenCookie(res: Response, token: string) {
-  res.cookie('token', token, {
+function tokenCookieOptions() {
+  return {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
-    maxAge: 30 * 24 * 60 * 60 * 1000,
+    sameSite: 'strict' as const,
     path: '/',
+  };
+}
+
+export function setTokenCookie(res: Response, token: string) {
+  res.cookie('token', token, {
+    ...tokenCookieOptions(),
+    maxAge: 30 * 24 * 60 * 60 * 1000,
+  });
+}
+
+export function clearTokenCookie(res: Response) {
+  res.cookie('token', '', {
+    ...tokenCookieOptions(),
+    maxAge: 0,
   });
 }
 

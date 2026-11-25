@@ -6,6 +6,8 @@ import {
   roundMacros,
   unitScale,
   caloriesFromMacros,
+  mealPulseStatus,
+  phaseTargetPresets,
 } from './nutrition';
 
 const oats = { calories: 150, carbs_g: 27, protein_g: 5, fat_g: 2.5 };
@@ -17,6 +19,79 @@ const noManual = {
   manual_protein_g: null,
   manual_fat_g: null,
 };
+
+describe('phaseTargetPresets', () => {
+  it.each([
+    ['lean-gain', {
+      rest: { calories: 2600, carbsG: 310, proteinG: 160, fatG: 80 },
+      workout: { calories: 2900, carbsG: 385, proteinG: 160, fatG: 80 },
+    }],
+    ['maintenance', {
+      rest: { calories: 2401, carbsG: 272, proteinG: 155, fatG: 77 },
+      workout: { calories: 2701, carbsG: 347, proteinG: 155, fatG: 77 },
+    }],
+    ['mini-cut', {
+      rest: { calories: 2095, carbsG: 203, proteinG: 170, fatG: 67 },
+      workout: { calories: 2347, carbsG: 266, proteinG: 170, fatG: 67 },
+    }],
+  ] as const)('gives consistent whole-integer targets for %s at 160 lbs', (phase, expected) => {
+    expect(phaseTargetPresets(160, phase)).toEqual(expected);
+  });
+
+  it.each([
+    ['lean-gain', {
+      rest: { calories: 2852, carbsG: 339, proteinG: 176, fatG: 88 },
+      workout: { calories: 3152, carbsG: 414, proteinG: 176, fatG: 88 },
+    }],
+    ['maintenance', {
+      rest: { calories: 2632, carbsG: 299, proteinG: 170, fatG: 84 },
+      workout: { calories: 2932, carbsG: 374, proteinG: 170, fatG: 84 },
+    }],
+    ['mini-cut', {
+      rest: { calories: 2298, carbsG: 222, proteinG: 186, fatG: 74 },
+      workout: { calories: 2550, carbsG: 285, proteinG: 186, fatG: 74 },
+    }],
+  ] as const)('scales %s to a fractional saved weight of 175.5 lbs', (phase, expected) => {
+    expect(phaseTargetPresets(175.5, phase)).toEqual(expected);
+  });
+
+  it.each([undefined, 0, -10, NaN, Infinity])('uses 160 lbs when weight is %s', (weight) => {
+    for (const phase of ['lean-gain', 'maintenance', 'mini-cut'] as const) {
+      expect(phaseTargetPresets(weight!, phase)).toEqual(phaseTargetPresets(160, phase));
+    }
+  });
+});
+
+describe('mealPulseStatus', () => {
+  const target = { calories: 600, carbsG: 75, proteinG: 40, fatG: 20 };
+
+  it('leaves an all-zero meal without a status', () => {
+    expect(mealPulseStatus({ calories: 0, carbsG: 0, proteinG: 0, fatG: 0 }, target)).toBe('');
+  });
+
+  it('is on track when calories and protein both reach 85% of their targets', () => {
+    expect(mealPulseStatus({ calories: 510, carbsG: 60, proteinG: 34, fatG: 16 }, target)).toBe('on-track');
+  });
+
+  it.each([
+    ['high-calorie, low-protein pastry', { calories: 650, carbsG: 100, proteinG: 6, fatG: 25 }],
+    ['lean protein-pulse snack', { calories: 200, carbsG: 12, proteinG: 34, fatG: 2 }],
+    ['50% of calories only', { calories: 300, carbsG: 60, proteinG: 0, fatG: 6 }],
+    ['50% of protein only', { calories: 80, carbsG: 0, proteinG: 20, fatG: 0 }],
+    ['calories just below 85%', { calories: 509.9, carbsG: 60, proteinG: 40, fatG: 16 }],
+    ['protein just below 85%', { calories: 600, carbsG: 75, proteinG: 33.9, fatG: 20 }],
+  ])('is partial for %s', (_label, logged) => {
+    expect(mealPulseStatus(logged, target)).toBe('partial');
+  });
+
+  it.each([
+    ['both calories and protein just below 50%', { calories: 299.9, carbsG: 30, proteinG: 19.9, fatG: 10 }],
+    ['only carbs logged', { calories: 0, carbsG: 10, proteinG: 0, fatG: 0 }],
+    ['only fat logged', { calories: 0, carbsG: 0, proteinG: 0, fatG: 10 }],
+  ])('is low for %s', (_label, logged) => {
+    expect(mealPulseStatus(logged, target)).toBe('low');
+  });
+});
 
 describe('food x servings', () => {
   it('scales a food and stores it rounded to 0.1', () => {

@@ -1,5 +1,7 @@
-import type { User, Food, ExternalFood, MealLog, Recipe, RecipeIngredient, WeightLog } from './types';
+import type { User, Food, ExternalFood, MealLog, Recipe, RecipeIngredient, WeightLog, WeightLogInput } from './types';
 import { type IngredientRow, type Macros, macrosOf, scaleMacros, recipePerServing, roundMacros } from '../server/src/nutrition';
+import { isWaistInches } from '../server/src/waist';
+import { dailyCheckValidationError, type DailyCheckKey } from '../server/src/daily-checks';
 
 const GUEST_KEY = 'guest_mode';
 const SAMPLE_KEY = 'guest_sample_active';
@@ -18,10 +20,12 @@ export function clearGuestData() {
   localStorage.removeItem('guest_user');
   localStorage.removeItem('guest_foods');
   localStorage.removeItem('guest_meals');
+  localStorage.removeItem('guest_recipe_state');
   localStorage.removeItem('guest_recipes');
   localStorage.removeItem('guest_recipe_ingredients');
   localStorage.removeItem('guest_weight');
   localStorage.removeItem('guest_workout_days');
+  localStorage.removeItem('guest_daily_checks');
   localStorage.removeItem('guest_next_id');
   localStorage.removeItem(SAMPLE_KEY);
 }
@@ -114,6 +118,7 @@ export function seedSampleData() {
     date,
     time: '07:00',
     weight_lbs: 165,
+    waist_inches: null,
     notes: null,
     _sample: true,
   };
@@ -156,24 +161,124 @@ function storedMealMacros(m: Macros): Pick<MealLog, 'calories' | 'carbs_g' | 'pr
   return { calories: stored.calories, carbs_g: stored.carbsG, protein_g: stored.proteinG, fat_g: stored.fatG };
 }
 
-// What guest_recipes holds. perServing and ingredientCount are computed on read, like the
+// Persisted metadata. perServing and ingredientCount are computed on read, like the
 // server's recipes list; recipes saved before that may still carry stale copies of both.
 type StoredRecipe = Omit<Recipe, 'perServing' | 'ingredientCount'>;
 
-function recipeIngredients(id: number): RecipeIngredient[] {
-  return getStore<Record<string, RecipeIngredient[]>>('guest_recipe_ingredients', {})[id] || [];
+const RECIPE_STATE_KEY = 'guest_recipe_state';
+
+interface GuestRecipeState {
+  version: 1;
+  recipes: StoredRecipe[];
+  ingredients: Record<string, RecipeIngredient[]>;
+  nextId: number;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isIdentity(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+}
+
+function invalidRecipeState(): never {
+  throw new Error('Invalid guest Recipe storage');
+}
+
+// Validate structure and allocation without normalizing legacy values (including zero).
+function recipeCollections(recipes: unknown, ingredients: unknown) {
+  if (!Array.isArray(recipes) || !isRecord(ingredients)) invalidRecipeState();
+  let greatestId = 0;
+  const identities = new Set<number>();
+  const retainIdentity = (value: unknown) => {
+    if (!isIdentity(value) || identities.has(value)) invalidRecipeState();
+    identities.add(value);
+    greatestId = Math.max(greatestId, value);
+  };
+  const numericFields = (row: Record<string, unknown>, fields: string[]) => {
+    for (const field of fields) {
+      const value = row[field];
+      if (value != null && (typeof value !== 'number' || !Number.isFinite(value))) invalidRecipeState();
+    }
+  };
+  const stringFields = (row: Record<string, unknown>, fields: string[]) => {
+    for (const field of fields) {
+      if (row[field] != null && typeof row[field] !== 'string') invalidRecipeState();
+    }
+  };
+  for (const recipe of recipes) {
+    if (!isRecord(recipe) || typeof recipe.name !== 'string') invalidRecipeState();
+    retainIdentity(recipe.id);
+    numericFields(recipe, ['user_id', 'total_servings', 'manual_calories', 'manual_carbs_g', 'manual_protein_g', 'manual_fat_g']);
+    stringFields(recipe, ['serving_unit']);
+  }
+  for (const [key, occurrences] of Object.entries(ingredients)) {
+    const recipeId = Number(key);
+    if (!isIdentity(recipeId) || String(recipeId) !== key || !Array.isArray(occurrences)) invalidRecipeState();
+    greatestId = Math.max(greatestId, recipeId);
+    for (const occurrence of occurrences) {
+      if (!isRecord(occurrence) || typeof occurrence.name !== 'string') invalidRecipeState();
+      retainIdentity(occurrence.id);
+      // Food references retain the existing missing-Food fallback, including food_id 0.
+      numericFields(occurrence, ['food_id', 'servings', 'qty', 'serving_size', 'calories', 'carbs_g', 'protein_g', 'fat_g']);
+      stringFields(occurrence, ['unit_label', 'brand', 'serving_unit', 'measures']);
+    }
+  }
+  return {
+    recipes: recipes as StoredRecipe[],
+    ingredients: ingredients as Record<string, RecipeIngredient[]>,
+    greatestId,
+  };
+}
+
+function readRecipeValue(key: string, fallback: unknown): unknown {
+  const value = localStorage.getItem(key);
+  return value === null ? fallback : JSON.parse(value);
+}
+
+// Every operation loads a detached state; reads never migrate or cache it.
+function loadRecipeState(): GuestRecipeState {
+  const canonical = localStorage.getItem(RECIPE_STATE_KEY);
+  if (canonical !== null) {
+    const state: unknown = JSON.parse(canonical);
+    if (!isRecord(state) || state.version !== 1 || !isIdentity(state.nextId)) invalidRecipeState();
+    const { recipes, ingredients, greatestId } = recipeCollections(state.recipes, state.ingredients);
+    if (state.nextId <= greatestId) invalidRecipeState();
+    return { version: 1, recipes, ingredients, nextId: state.nextId };
+  }
+
+  const { recipes, ingredients, greatestId } = recipeCollections(
+    readRecipeValue('guest_recipes', []), readRecipeValue('guest_recipe_ingredients', {}),
+  );
+  const legacyNextId = readRecipeValue('guest_next_id', 1);
+  if (!isIdentity(legacyNextId) || greatestId >= Number.MAX_SAFE_INTEGER) invalidRecipeState();
+  return { version: 1, recipes, ingredients, nextId: Math.max(legacyNextId, greatestId + 1) };
+}
+
+function allocateRecipeIdentity(state: GuestRecipeState): number {
+  if (state.nextId >= Number.MAX_SAFE_INTEGER) throw new Error('Guest Recipe identities exhausted');
+  return state.nextId++;
+}
+
+function commitRecipeState(state: GuestRecipeState) {
+  setStore(RECIPE_STATE_KEY, state);
+  // Cleanup cannot undo a committed operation or turn it into a rejection.
+  for (const key of ['guest_recipes', 'guest_recipe_ingredients']) {
+    try { localStorage.removeItem(key); } catch { /* The canonical record is authoritative. */ }
+  }
 }
 
 // The ingredient rows recipePerServing totals. A manual-macro recipe reports none,
 // since its manual macros override the ingredient sum (as server/src/recipe-ingredients.ts).
-function recipeIngredientRows(recipe: StoredRecipe): IngredientRow[] {
+function recipeIngredientRows(state: GuestRecipeState, recipe: StoredRecipe): IngredientRow[] {
   if (recipe.manual_calories != null) return [];
   // A missing servings field is a legacy row. Zero is a real count and must reach recipePerServing, as the server read does.
-  return recipeIngredients(recipe.id).map((ing) => ({ food: ing, servings: ing.servings ?? 1 }));
+  return (state.ingredients[recipe.id] || []).map((ing) => ({ food: ing, servings: ing.servings ?? 1 }));
 }
 
-function withNutrition(recipe: StoredRecipe): Recipe {
-  const ingredients = recipeIngredientRows(recipe);
+function withNutrition(state: GuestRecipeState, recipe: StoredRecipe): Recipe {
+  const ingredients = recipeIngredientRows(state, recipe);
   return {
     ...recipe,
     ingredientCount: ingredients.length,
@@ -181,15 +286,23 @@ function withNutrition(recipe: StoredRecipe): Recipe {
   };
 }
 
+// Synchronous so Meal logging keeps its existing read-modify-write sequence.
+function recipeForMeal(id: number, servings: number): { name: string; macros: Macros } | undefined {
+  const state = loadRecipeState();
+  const recipe = state.recipes.find(recipe => recipe.id === id);
+  if (!recipe) return undefined;
+  return { name: recipe.name, macros: scaleMacros(recipePerServing(recipe, recipeIngredientRows(state, recipe)), servings) };
+}
+
 // One ingredient as the recipe editor sends it.
 type IngredientInput = { foodId: number; servings: number; qty?: number; unitLabel?: string };
 
-function buildRecipeIngredients(ingredients: IngredientInput[]): RecipeIngredient[] {
+function buildRecipeIngredients(state: GuestRecipeState, ingredients: IngredientInput[]): RecipeIngredient[] {
   const foods = getStore<Food[]>('guest_foods', []);
   return ingredients.map((ing) => {
     const food = foods.find((f) => f.id === ing.foodId);
     return {
-      id: nextId(),
+      id: allocateRecipeIdentity(state),
       food_id: ing.foodId,
       servings: ing.servings || 1,
       qty: ing.qty || null,
@@ -214,6 +327,7 @@ const DEFAULT_GUEST_USER: User = {
   emailVerified: false,
   heightInches: 0,
   currentWeightLbs: 0,
+  targetWaistInches: null,
   targetCalories: 2000,
   targetCarbsG: 250,
   targetProteinG: 150,
@@ -235,6 +349,9 @@ export const localAuth = {
   },
 
   updateProfile: async (data: Partial<User>): Promise<{ user: User }> => {
+    if (data.targetWaistInches != null && !isWaistInches(data.targetWaistInches)) {
+      throw new Error('Waist ceiling must be a number between 20 and 60 inches');
+    }
     const user = getGuestUser();
     Object.assign(user, data);
     setStore('guest_user', user);
@@ -400,10 +517,9 @@ export const localMeals = {
     }
 
     if (data.recipeId) {
-      const recipes = getStore<StoredRecipe[]>('guest_recipes', []);
-      const recipe = recipes.find((r) => r.id === data.recipeId);
+      const recipe = recipeForMeal(data.recipeId, servings);
       if (recipe) {
-        macros = scaleMacros(recipePerServing(recipe, recipeIngredientRows(recipe)), servings);
+        macros = recipe.macros;
         recipe_name = recipe.name;
       }
     }
@@ -507,14 +623,15 @@ export const localMeals = {
 // Recipes
 export const localRecipes = {
   list: async (): Promise<{ recipes: Recipe[] }> => {
-    return { recipes: getStore<StoredRecipe[]>('guest_recipes', []).map(withNutrition) };
+    const state = loadRecipeState();
+    return { recipes: state.recipes.map(recipe => withNutrition(state, recipe)) };
   },
 
   get: async (id: number): Promise<{ recipe: Recipe; ingredients: RecipeIngredient[] }> => {
-    const recipes = getStore<StoredRecipe[]>('guest_recipes', []);
-    const recipe = recipes.find((r) => r.id === id);
+    const state = loadRecipeState();
+    const recipe = state.recipes.find((r) => r.id === id);
     if (!recipe) throw new Error('Recipe not found');
-    return { recipe: withNutrition(recipe), ingredients: recipeIngredients(id) };
+    return { recipe: withNutrition(state, recipe), ingredients: state.ingredients[id] || [] };
   },
 
   create: async (data: {
@@ -527,9 +644,9 @@ export const localRecipes = {
     manualProteinG?: number | null;
     manualFatG?: number | null;
   }): Promise<{ recipe: { id: number } }> => {
-    const recipes = getStore<StoredRecipe[]>('guest_recipes', []);
-    const id = nextId();
-    const ingredients = buildRecipeIngredients(data.ingredients);
+    const state = loadRecipeState();
+    const id = allocateRecipeIdentity(state);
+    const ingredients = buildRecipeIngredients(state, data.ingredients);
 
     const recipe: StoredRecipe = {
       id,
@@ -543,11 +660,9 @@ export const localRecipes = {
       manual_fat_g: data.manualFatG ?? null,
     };
 
-    recipes.push(recipe);
-    setStore('guest_recipes', recipes);
-    const allIngredients = getStore<Record<string, RecipeIngredient[]>>('guest_recipe_ingredients', {});
-    allIngredients[id] = ingredients;
-    setStore('guest_recipe_ingredients', allIngredients);
+    state.recipes.push(recipe);
+    state.ingredients[id] = ingredients;
+    commitRecipeState(state);
 
     return { recipe: { id } };
   },
@@ -565,10 +680,10 @@ export const localRecipes = {
       manualFatG?: number | null;
     }
   ): Promise<{ success: boolean }> => {
-    const recipes = getStore<StoredRecipe[]>('guest_recipes', []);
-    const idx = recipes.findIndex((r) => r.id === id);
+    const state = loadRecipeState();
+    const idx = state.recipes.findIndex((r) => r.id === id);
     if (idx === -1) throw new Error('Recipe not found');
-    const recipe = recipes[idx];
+    const recipe = state.recipes[idx];
 
     if (data.name !== undefined) recipe.name = data.name;
     if (data.totalServings !== undefined) recipe.total_servings = data.totalServings;
@@ -579,46 +694,40 @@ export const localRecipes = {
     if (data.manualFatG !== undefined) recipe.manual_fat_g = data.manualFatG;
 
     if (data.ingredients !== undefined) {
-      const allIngredients = getStore<Record<string, RecipeIngredient[]>>('guest_recipe_ingredients', {});
-      allIngredients[id] = buildRecipeIngredients(data.ingredients);
-      setStore('guest_recipe_ingredients', allIngredients);
+      state.ingredients[id] = buildRecipeIngredients(state, data.ingredients);
     }
 
-    recipes[idx] = recipe;
-    setStore('guest_recipes', recipes);
+    commitRecipeState(state);
     return { success: true };
   },
 
   delete: async (id: number): Promise<{ success: boolean }> => {
-    const recipes = getStore<StoredRecipe[]>('guest_recipes', []).filter((r) => r.id !== id);
-    setStore('guest_recipes', recipes);
-    const allIngredients = getStore<Record<string, RecipeIngredient[]>>('guest_recipe_ingredients', {});
-    delete allIngredients[id];
-    setStore('guest_recipe_ingredients', allIngredients);
+    const state = loadRecipeState();
+    state.recipes = state.recipes.filter((r) => r.id !== id);
+    delete state.ingredients[id];
+    commitRecipeState(state);
     return { success: true };
   },
 
   copy: async (id: number): Promise<{ recipe: { id: number } }> => {
-    const recipes = getStore<StoredRecipe[]>('guest_recipes', []);
-    const original = recipes.find((r) => r.id === id);
+    const state = loadRecipeState();
+    const original = state.recipes.find((r) => r.id === id);
     if (!original) throw new Error('Recipe not found');
     // Drop the stale perServing and ingredientCount a recipe saved before they moved to read time may carry.
     const { perServing: _perServing, ingredientCount: _ingredientCount, ...stored } = original as Partial<Recipe> & StoredRecipe;
 
-    const newId = nextId();
+    const newId = allocateRecipeIdentity(state);
     const newRecipe: StoredRecipe = {
       ...stored,
       id: newId,
       name: original.name + ' (Copy)',
     };
 
-    const newIngs = recipeIngredients(id).map((ing) => ({ ...ing, id: nextId() }));
+    const newIngs = (state.ingredients[id] || []).map((ing) => ({ ...ing, id: allocateRecipeIdentity(state) }));
 
-    recipes.push(newRecipe);
-    setStore('guest_recipes', recipes);
-    const allIngredients = getStore<Record<string, RecipeIngredient[]>>('guest_recipe_ingredients', {});
-    allIngredients[newId] = newIngs;
-    setStore('guest_recipe_ingredients', allIngredients);
+    state.recipes.push(newRecipe);
+    state.ingredients[newId] = newIngs;
+    commitRecipeState(state);
 
     return { recipe: { id: newId } };
   },
@@ -627,7 +736,9 @@ export const localRecipes = {
 // Weight
 export const localWeight = {
   list: async (limit?: number): Promise<{ logs: WeightLog[] }> => {
-    let logs = getStore<WeightLog[]>('guest_weight', []);
+    let logs = getStore<WeightLog[]>('guest_weight', []).map((log) => ({
+      ...log, waist_inches: log.waist_inches ?? null,
+    }));
     logs.sort((a, b) => {
       const cmp = b.date.localeCompare(a.date);
       if (cmp !== 0) return cmp;
@@ -637,7 +748,10 @@ export const localWeight = {
     return { logs };
   },
 
-  log: async (date: string, weightLbs: number, time?: string, notes?: string): Promise<{ log: WeightLog }> => {
+  log: async ({ date, weightLbs, time, notes, waistInches }: WeightLogInput): Promise<{ log: WeightLog }> => {
+    if (waistInches != null && !isWaistInches(waistInches)) {
+      throw new Error('Waist must be a number between 20 and 60 inches');
+    }
     const logs = getStore<WeightLog[]>('guest_weight', []);
     const timeVal = time || '';
     const existing = logs.findIndex((l) => l.date === date && (l.time || '') === timeVal);
@@ -646,6 +760,7 @@ export const localWeight = {
       date,
       time: timeVal,
       weight_lbs: weightLbs,
+      waist_inches: waistInches ?? null,
       notes: notes || null,
     };
     if (existing >= 0) logs[existing] = log;
@@ -658,6 +773,26 @@ export const localWeight = {
     const logs = getStore<WeightLog[]>('guest_weight', []).filter((l) => l.id !== id);
     setStore('guest_weight', logs);
     return { success: true };
+  },
+};
+
+// Daily checks
+export const localDailyChecks = {
+  get: async (date: string): Promise<{ checks: string[] }> => {
+    const days = getStore<Record<string, string[]>>('guest_daily_checks', {});
+    return { checks: days[date] ?? [] };
+  },
+
+  set: async (date: string, key: DailyCheckKey, checked: boolean): Promise<{ checks: string[] }> => {
+    const error = dailyCheckValidationError(key, checked);
+    if (error) throw new Error(error);
+    const days = getStore<Record<string, string[]>>('guest_daily_checks', {});
+    const checks = new Set(days[date] ?? []);
+    if (checked) checks.add(key);
+    else checks.delete(key);
+    days[date] = [...checks].sort();
+    setStore('guest_daily_checks', days);
+    return { checks: days[date] };
   },
 };
 

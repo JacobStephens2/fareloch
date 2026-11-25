@@ -1,11 +1,6 @@
-import { weight as weightApi } from '../api';
 import { todayStr } from '../state';
-import type { WeightLog } from '../types';
-import { Chart, LineController, LineElement, PointElement, LinearScale, CategoryScale, Tooltip, Filler } from 'chart.js';
-
-Chart.register(LineController, LineElement, PointElement, LinearScale, CategoryScale, Tooltip, Filler);
-
-let chartInstance: Chart | null = null;
+import { setCleanup } from '../router';
+import { mountWeight } from './weight-session';
 
 export function weightView() {
   return {
@@ -30,9 +25,39 @@ export function weightView() {
             <label for="weight-lbs">Weight (lbs)</label>
             <input type="number" id="weight-lbs" step="0.1" min="50" max="500" required />
           </div>
+          <div class="form-group">
+            <label for="weight-waist">Waist (in) <span class="text-muted">(optional)</span></label>
+            <input type="number" id="weight-waist" step="0.1" min="20" max="60" aria-describedby="weight-waist-hint" />
+            <p id="weight-waist-hint" class="form-hint">Measure around your bare-skin navel.</p>
+          </div>
           <button type="submit" class="btn btn-primary btn-block">Log Weight</button>
         </form>
 
+        <form id="waist-ceiling-form" class="weight-form">
+          <h3>Waist-Thermostat</h3>
+          <div class="form-group">
+            <label for="waist-ceiling">Waist ceiling (in) <span class="text-muted">(optional)</span></label>
+            <input type="number" id="waist-ceiling" step="0.01" min="20" max="60" aria-describedby="waist-ceiling-hint" />
+            <p id="waist-ceiling-hint" class="form-hint">Compare your latest navel waist with your ceiling. Clear and save to disable.</p>
+          </div>
+          <button type="submit" class="btn btn-primary btn-block">Save Ceiling</button>
+          <p id="waist-ceiling-message" class="form-hint" role="status"></p>
+        </form>
+
+        <p id="waist-summary" class="waist-summary" role="status" hidden></p>
+        <div id="weight-trend-summary" class="weight-trend-summary" role="status">
+          <dl class="weight-trend-values">
+            <div>
+              <dt>7-Day Trend</dt>
+              <dd id="weight-trend-value">Loading...</dd>
+            </div>
+            <div>
+              <dt>Weekly Change</dt>
+              <dd id="weight-weekly-change">Loading...</dd>
+            </div>
+          </dl>
+          <p id="weight-trend-as-of" class="form-hint"></p>
+        </div>
         <div class="chart-container">
           <canvas id="weight-chart"></canvas>
         </div>
@@ -43,140 +68,8 @@ export function weightView() {
       </div>
     `,
     init: () => {
-      document.getElementById('weight-form')!.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const date = (document.getElementById('weight-date') as HTMLInputElement).value;
-        const time = (document.getElementById('weight-time') as HTMLInputElement).value;
-        const lbs = parseFloat((document.getElementById('weight-lbs') as HTMLInputElement).value);
-        if (!date || !lbs) return;
-
-        const btn = (e.target as HTMLFormElement).querySelector('button') as HTMLButtonElement;
-        btn.disabled = true;
-        try {
-          await weightApi.log(date, lbs, time);
-          (document.getElementById('weight-lbs') as HTMLInputElement).value = '';
-          loadWeightData();
-        } catch {
-          alert('Failed to log weight');
-        }
-        btn.disabled = false;
-      });
-
-      loadWeightData();
+      const root = document.getElementById('app')!.querySelector<HTMLElement>('.page')!;
+      setCleanup(mountWeight(root));
     },
   };
-}
-
-async function loadWeightData() {
-  try {
-    const { logs } = await weightApi.list(90);
-    renderChart(logs);
-    renderHistory(logs);
-  } catch {
-    const container = document.getElementById('weight-history');
-    if (container) container.innerHTML = '<p class="form-error">Failed to load weight data</p>';
-  }
-}
-
-function renderChart(logs: WeightLog[]) {
-  const canvas = document.getElementById('weight-chart') as HTMLCanvasElement;
-  if (!canvas) return;
-
-  // Sort chronologically
-  const sorted = [...logs].sort((a, b) => {
-    const cmp = a.date.localeCompare(b.date);
-    if (cmp !== 0) return cmp;
-    return (a.time || '').localeCompare(b.time || '');
-  });
-  const labels = sorted.map((l) => {
-    const d = new Date(l.date + 'T12:00:00');
-    const dateStr = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-    return l.time ? `${dateStr} ${l.time}` : dateStr;
-  });
-  const data = sorted.map((l) => l.weight_lbs);
-
-  if (chartInstance) chartInstance.destroy();
-
-  chartInstance = new Chart(canvas, {
-    type: 'line',
-    data: {
-      labels,
-      datasets: [
-        {
-          label: 'Weight (lbs)',
-          data,
-          borderColor: '#10B981',
-          backgroundColor: 'rgba(16, 185, 129, 0.1)',
-          borderWidth: 2,
-          pointRadius: 3,
-          pointBackgroundColor: '#10B981',
-          tension: 0.3,
-          fill: true,
-        },
-      ],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        tooltip: {
-          callbacks: {
-            label: (ctx) => `${ctx.parsed.y} lbs`,
-          },
-        },
-      },
-      scales: {
-        y: {
-          beginAtZero: false,
-          ticks: {
-            callback: (val) => `${val} lbs`,
-          },
-        },
-        x: {
-          ticks: {
-            maxTicksLimit: 8,
-          },
-        },
-      },
-    },
-  });
-}
-
-function renderHistory(logs: WeightLog[]) {
-  const container = document.getElementById('weight-history');
-  if (!container) return;
-
-  if (logs.length === 0) {
-    container.innerHTML = '<p class="text-muted">No weight entries yet. Log your first one above!</p>';
-    return;
-  }
-
-  let html = '<h3>Recent Entries</h3>';
-  for (const log of logs.slice(0, 14)) {
-    const d = new Date(log.date + 'T12:00:00');
-    const dateStr = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-    const timeStr = log.time ? ` at ${log.time}` : '';
-    html += `
-      <div class="weight-entry">
-        <span class="weight-date">${dateStr}${timeStr}</span>
-        <span class="weight-value">${log.weight_lbs} lbs</span>
-        <button class="btn-icon btn-delete-weight" data-id="${log.id}">&times;</button>
-      </div>
-    `;
-  }
-  container.innerHTML = html;
-
-  container.querySelectorAll('.btn-delete-weight').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const id = parseInt((btn as HTMLElement).dataset.id || '0');
-      if (id && confirm('Delete this entry?')) {
-        try {
-          await weightApi.delete(id);
-          loadWeightData();
-        } catch {
-          // Ignore
-        }
-      }
-    });
-  });
 }

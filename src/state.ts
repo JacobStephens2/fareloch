@@ -3,6 +3,7 @@ import type { User } from './types';
 interface AppState {
   user: User | null;
   selectedDate: string;
+  mealLogNotice?: string;
   loading: boolean;
 }
 

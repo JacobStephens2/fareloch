@@ -32,6 +32,7 @@ function initSchema() {
       email_verified INTEGER DEFAULT 0,
       height_inches REAL,
       current_weight_lbs REAL,
+      target_waist_inches REAL,
       target_calories INTEGER DEFAULT 2590,
       target_carbs_g INTEGER DEFAULT 340,
       target_protein_g INTEGER DEFAULT 150,
@@ -47,6 +48,13 @@ function initSchema() {
       user_id INTEGER NOT NULL REFERENCES users(id),
       date TEXT NOT NULL,
       PRIMARY KEY (user_id, date)
+    );
+
+    CREATE TABLE IF NOT EXISTS daily_checks (
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      date TEXT NOT NULL,
+      check_key TEXT NOT NULL,
+      PRIMARY KEY (user_id, date, check_key)
     );
 
     CREATE TABLE IF NOT EXISTS email_verification_tokens (
@@ -132,6 +140,7 @@ function initSchema() {
       date TEXT NOT NULL,
       time TEXT NOT NULL DEFAULT '',
       weight_lbs REAL NOT NULL,
+      waist_inches REAL,
       notes TEXT,
       created_at TEXT DEFAULT (datetime('now')),
       UNIQUE(user_id, date, time)
@@ -183,9 +192,17 @@ function initSchema() {
     `);
   }
 
+  const migratedWeightCols = db.prepare("PRAGMA table_info(weight_logs)").all() as { name: string }[];
+  if (!migratedWeightCols.some((column) => column.name === 'waist_inches')) {
+    db.exec('ALTER TABLE weight_logs ADD COLUMN waist_inches REAL');
+  }
+
   // Migration: workout-day targets and workout_days table
   const userCols = db.prepare("PRAGMA table_info(users)").all() as any[];
   const userColNames = userCols.map((c: any) => c.name);
+  if (!userColNames.includes('target_waist_inches')) {
+    db.exec('ALTER TABLE users ADD COLUMN target_waist_inches REAL');
+  }
   if (!userColNames.includes('workout_target_calories')) {
     db.exec(`
       ALTER TABLE users ADD COLUMN workout_target_calories INTEGER DEFAULT 2890;

@@ -1,7 +1,7 @@
 import { auth } from '../api';
-import { setState } from '../state';
-import { navigate, getQueryParams } from '../router';
-import { setGuestMode, getGuestUser, seedSampleData } from '../local-db';
+import { getQueryParams, setCleanup } from '../router';
+import { mountLoginRegistration } from './login-registration-session';
+import { mountPasswordRecovery } from './password-recovery-session';
 
 export function loginView() {
   return {
@@ -35,36 +35,8 @@ export function loginView() {
       </div>
     `,
     init: () => {
-      const form = document.getElementById('login-form') as HTMLFormElement;
-      const errorEl = document.getElementById('login-error')!;
-
-      form.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        errorEl.classList.add('hidden');
-        const email = (form.querySelector('#email') as HTMLInputElement).value;
-        const password = (form.querySelector('#password') as HTMLInputElement).value;
-        const btn = form.querySelector('button')!;
-        btn.disabled = true;
-        btn.textContent = 'Logging in...';
-
-        try {
-          const { user } = await auth.login(email, password);
-          setState({ user });
-          navigate('#/');
-        } catch (err: any) {
-          errorEl.textContent = err.message;
-          errorEl.classList.remove('hidden');
-          btn.disabled = false;
-          btn.textContent = 'Log In';
-        }
-      });
-
-      document.getElementById('guest-btn')!.addEventListener('click', () => {
-        setGuestMode(true);
-        seedSampleData();
-        setState({ user: getGuestUser() });
-        navigate('#/');
-      });
+      const root = document.querySelector<HTMLElement>('#app .auth-container')!;
+      setCleanup(mountLoginRegistration(root, 'login'));
     },
   };
 }
@@ -102,28 +74,8 @@ export function registerView() {
       </div>
     `,
     init: () => {
-      const form = document.getElementById('register-form') as HTMLFormElement;
-      const errorEl = document.getElementById('register-error')!;
-
-      form.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        errorEl.classList.add('hidden');
-        const firstName = (form.querySelector('#firstName') as HTMLInputElement).value;
-        const email = (form.querySelector('#email') as HTMLInputElement).value;
-        const password = (form.querySelector('#password') as HTMLInputElement).value;
-        const btn = form.querySelector('button')!;
-        btn.disabled = true;
-
-        try {
-          const { user } = await auth.register(email, password, firstName);
-          setState({ user });
-          navigate('#/');
-        } catch (err: any) {
-          errorEl.textContent = err.message;
-          errorEl.classList.remove('hidden');
-          btn.disabled = false;
-        }
-      });
+      const root = document.querySelector<HTMLElement>('#app .auth-container')!;
+      setCleanup(mountLoginRegistration(root, 'register'));
     },
   };
 }
@@ -151,23 +103,8 @@ export function forgotPasswordView() {
       </div>
     `,
     init: () => {
-      const form = document.getElementById('forgot-form') as HTMLFormElement;
-      form.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const email = (form.querySelector('#email') as HTMLInputElement).value;
-        const btn = form.querySelector('button')!;
-        btn.disabled = true;
-
-        try {
-          await auth.forgotPassword(email);
-          document.getElementById('forgot-msg')!.textContent = 'If that email exists, a reset link has been sent.';
-          document.getElementById('forgot-msg')!.classList.remove('hidden');
-        } catch (err: any) {
-          document.getElementById('forgot-error')!.textContent = err.message;
-          document.getElementById('forgot-error')!.classList.remove('hidden');
-        }
-        btn.disabled = false;
-      });
+      const root = document.querySelector<HTMLElement>('#app .auth-container')!;
+      setCleanup(mountPasswordRecovery(root, { kind: 'forgot' }));
     },
   };
 }
@@ -195,27 +132,9 @@ export function resetPasswordView() {
       </div>
     `,
     init: () => {
-      const form = document.getElementById('reset-form') as HTMLFormElement;
+      const root = document.querySelector<HTMLElement>('#app .auth-container')!;
       const params = getQueryParams();
-
-      form.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const password = (form.querySelector('#password') as HTMLInputElement).value;
-        const btn = form.querySelector('button')!;
-        btn.disabled = true;
-
-        try {
-          await auth.resetPassword(params.token || '', password);
-          document.getElementById('reset-msg')!.textContent = 'Password reset! You can now log in.';
-          document.getElementById('reset-msg')!.classList.remove('hidden');
-          document.getElementById('reset-error')!.classList.add('hidden');
-          setTimeout(() => navigate('#/login'), 2000);
-        } catch (err: any) {
-          document.getElementById('reset-error')!.textContent = err.message;
-          document.getElementById('reset-error')!.classList.remove('hidden');
-          btn.disabled = false;
-        }
-      });
+      setCleanup(mountPasswordRecovery(root, { kind: 'reset', token: params.token || '' }));
     },
   };
 }

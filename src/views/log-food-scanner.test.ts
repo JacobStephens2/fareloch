@@ -1,0 +1,245 @@
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { deferred, food } from '../test/food-search-fixtures';
+import { click, go } from '../test/recipe-editor-fixtures';
+import { scannerAdapter } from '../test/barcode-scanner-fixtures';
+
+let adapter: ReturnType<typeof scannerAdapter>;
+const barcode = vi.fn();
+const quickLog = vi.fn();
+const create = vi.fn();
+const custom = vi.fn();
+let listeners: ReturnType<typeof listenForRoutes>;
+function listenForRoutes() { return vi.spyOn(window, 'addEventListener'); }
+
+const settle = () => vi.advanceTimersByTimeAsync(0);
+
+beforeEach(async () => {
+  vi.resetModules();
+  vi.useFakeTimers();
+  adapter = scannerAdapter();
+  barcode.mockReset().mockResolvedValue({ food: food('Scanned apple') });
+  quickLog.mockReset();
+  create.mockReset();
+  custom.mockReset().mockResolvedValue({ foods: [] });
+  vi.doMock('../api', () => ({
+    foods: { recent: vi.fn().mockResolvedValue({ foods: [] }), barcode, custom, create },
+    meals: { quickLog }, recipes: {},
+  }));
+  vi.doMock('html5-qrcode', async () => ({ Html5Qrcode: await adapter.loadScanner() }));
+  document.body.innerHTML = '<div id="app"></div>';
+  window.history.replaceState(null, '', '#/other');
+  listeners = listenForRoutes();
+  const { route, startRouter } = await import('../router');
+  const { logFoodView } = await import('./log-food');
+  route('/log', logFoodView);
+  route('/other', () => ({ html: '<p>Other screen</p>', init() {} }));
+  startRouter();
+  go('/log');
+  await settle();
+});
+
+afterEach(async () => {
+  go('/other');
+  await settle();
+  for (const [type, listener] of listeners.mock.calls) {
+    if (type === 'hashchange') window.removeEventListener(type, listener);
+  }
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
+
+it.each(['/other', '/missing', '/log?date=2026-04-01&meal=lunch'])('departure to %s during startup releases only the captured instance', async destination => {
+  const startup = deferred<void>();
+  adapter.camera.startup = () => startup.promise;
+  click('#scan-btn');
+  await settle();
+  const first = adapter.instances[0];
+  go(destination);
+  await settle();
+  const current = document.querySelector('#app')!.innerHTML;
+  first.decode('obsolete');
+  startup.resolve();
+  await settle();
+  expect(first.stop).toHaveBeenCalledTimes(1);
+  expect(first.track.readyState).toBe('ended');
+  expect(document.querySelector('#app')!.innerHTML).toBe(current);
+  expect(barcode).not.toHaveBeenCalled();
+});
+
+it('Log Food looks up an accepted barcode only after camera release and presents the Food', async () => {
+  click('#scan-btn');
+  await settle();
+  const scanner = adapter.instances[0];
+  const stopping = deferred<void>();
+  adapter.camera.shutdown = () => stopping.promise;
+  barcode.mockImplementationOnce(async () => {
+    expect(scanner.track.readyState).toBe('ended');
+    return { food: food('Scanned apple') };
+  });
+  scanner.decode('012345');
+  scanner.decode('duplicate');
+  await settle();
+  expect(barcode).not.toHaveBeenCalled();
+  stopping.resolve();
+  await settle();
+  expect(barcode.mock.calls).toEqual([['012345']]);
+  expect(scanner.stop).toHaveBeenCalledTimes(1);
+  expect(scanner.track.readyState).toBe('ended');
+  expect(document.querySelector('#scanner-container')!.classList.contains('hidden')).toBe(true);
+  expect(document.querySelector('#food-detail-modal')!.classList.contains('hidden')).toBe(false);
+  expect(document.querySelector('#tab-content')!.textContent).toBe('Found: Scanned apple');
+});
+
+it.each(['success', 'failure'])('barcode lookup %s belongs to the live Log Food mount across tab changes', async outcome => {
+  const lookup = deferred<{ food: ReturnType<typeof food> }>();
+  barcode.mockReturnValueOnce(lookup.promise);
+  click('#scan-btn');
+  await settle();
+  adapter.instances[0].decode('captured-<code>');
+  await settle();
+  click('[data-tab="quick"]');
+  if (outcome === 'success') lookup.resolve({ food: food('Scanned <apple>') });
+  else lookup.reject(new Error('No match'));
+  await settle();
+  expect(document.querySelector('#tab-content')!.textContent).toBe(outcome === 'success'
+    ? 'Found: Scanned <apple>' : 'No product found for barcode captured-<code>');
+  expect(document.querySelector('#tab-content apple, #tab-content code')).toBeNull();
+  if (outcome === 'success') expect(document.querySelector('#modal-food-name')!.textContent).toBe('Scanned <apple>');
+});
+
+it.each(['quick', 'custom'] as const)('barcode feedback retires retained %s controls while its Log Food parent stays live', async kind => {
+  click(`[data-tab="${kind}"]`);
+  if (kind === 'custom') { await settle(); click('#create-food-btn'); }
+  const form = document.querySelector<HTMLFormElement>('form')!;
+  const prefix = kind === 'quick' ? 'quick' : 'cf';
+  const carbs = form.querySelector<HTMLInputElement>(`#${prefix}-carbs`)!;
+  const calories = form.querySelector<HTMLInputElement>(`#${prefix}-cal`)!;
+  carbs.value = '10';
+  carbs.dispatchEvent(new Event('input'));
+  click('#scan-btn');
+  await settle();
+  adapter.instances[0].decode('captured-code');
+  await settle();
+  const content = document.querySelector('#tab-content')!;
+  expect(content.textContent).toBe('Found: Scanned apple');
+  content.append(form);
+  const before = content.innerHTML;
+  carbs.value = '20';
+  carbs.dispatchEvent(new Event('input'));
+  form.dispatchEvent(new Event('submit', { cancelable: true }));
+  form.querySelector<HTMLButtonElement>('#cancel-create')?.click();
+  expect(calories.value).toBe('40');
+  expect(content.innerHTML).toBe(before);
+  expect(quickLog).not.toHaveBeenCalled();
+  expect(create).not.toHaveBeenCalled();
+  expect(custom).toHaveBeenCalledTimes(kind === 'custom' ? 1 : 0);
+  expect(document.querySelector('#modal-food-name')!.textContent).toBe('Scanned apple');
+  click('[data-tab="quick"]');
+  expect(document.querySelector('#quick-form')).not.toBeNull();
+});
+
+it.each(['success', 'failure'])('barcode lookup %s cannot publish after departure or remount', async outcome => {
+  for (const destination of ['/other', '/missing', '/log', '/log?date=2026-04-01&meal=lunch']) {
+    go('/log?date=2026-04-01&meal=lunch');
+    const lookup = deferred<{ food: ReturnType<typeof food> }>();
+    barcode.mockReturnValueOnce(lookup.promise);
+    click('#scan-btn');
+    await settle();
+    adapter.instances[adapter.instances.length - 1].decode('captured-code');
+    await settle();
+    expect(barcode).toHaveBeenLastCalledWith('captured-code');
+    const oldRoot = document.querySelector('.log-page')!;
+    go(destination);
+    await settle();
+    const oldHTML = oldRoot.innerHTML;
+    const current = document.querySelector('#app')!.innerHTML;
+    if (outcome === 'success') lookup.resolve({ food: food('Obsolete barcode') });
+    else lookup.reject(new Error('Obsolete barcode failure'));
+    await settle();
+    expect(oldRoot.innerHTML).toBe(oldHTML);
+    expect(document.querySelector('#app')!.innerHTML).toBe(current);
+    expect(window.location.hash).toBe(`#${destination}`);
+  }
+});
+
+it('retained scanner controls and callbacks cannot restart capture or lookup after disposal', async () => {
+  click('#scan-btn');
+  await settle();
+  const scan = document.querySelector<HTMLButtonElement>('#scan-btn')!;
+  const close = document.querySelector<HTMLButtonElement>('#scanner-close')!;
+  const torch = document.querySelector<HTMLButtonElement>('#torch-btn')!;
+  go('/other');
+  await settle();
+  const current = document.querySelector('#app')!.innerHTML;
+  scan.click();
+  close.click();
+  torch.click();
+  adapter.instances[0].decode('obsolete');
+  await settle();
+  expect(adapter.instances).toHaveLength(1);
+  expect(adapter.instances[0].stop).toHaveBeenCalledTimes(1);
+  expect(adapter.instances[0].track.applyConstraints).toHaveBeenCalledTimes(2);
+  expect(barcode).not.toHaveBeenCalled();
+  expect(document.querySelector('#app')!.innerHTML).toBe(current);
+  expect(window.location.hash).toBe('#/other');
+});
+
+it('fixed parent departure prevents a retained scanner opening before observer delivery', async () => {
+  const back = document.querySelector('#back-btn')!;
+  back.replaceWith(back.cloneNode(true));
+  const root = document.querySelector('.log-page')!;
+  const before = root.outerHTML;
+  click('#scan-btn');
+  expect(root.outerHTML).toBe(before);
+  await settle();
+  expect(adapter.instances).toHaveLength(0);
+  expect(barcode).not.toHaveBeenCalled();
+});
+
+it.each(['success', 'failure'])('barcode lookup %s is silent after raw parent departure before observer delivery', async outcome => {
+  const lookup = deferred<{ food: ReturnType<typeof food> }>();
+  barcode.mockReturnValueOnce(lookup.promise);
+  click('#scan-btn');
+  await settle();
+  adapter.instances[0].decode('retired-code');
+  await settle();
+  expect(adapter.instances[0].track.readyState).toBe('ended');
+  if (outcome === 'success') lookup.resolve({ food: food('Retired apple') });
+  else lookup.reject(new Error('Retired lookup'));
+  const root = document.querySelector('.log-page')!;
+  const app = root.parentElement!;
+  app.remove();
+  document.body.append(app);
+  const before = root.outerHTML;
+  await settle();
+  expect(root.outerHTML).toBe(before);
+  expect(barcode).toHaveBeenCalledTimes(1);
+});
+
+it('late Custom Food creation preserves scanner feedback after replacing its form', async () => {
+  const pending = deferred<{ food: ReturnType<typeof food> }>();
+  create.mockReturnValueOnce(pending.promise);
+  click('[data-tab="custom"]');
+  await settle();
+  click('#create-food-btn');
+  const form = document.querySelector<HTMLFormElement>('#create-food-form')!;
+  const name = form.querySelector<HTMLInputElement>('#cf-name')!;
+  const carbs = form.querySelector<HTMLInputElement>('#cf-carbs')!;
+  name.value = 'New apple';
+  carbs.value = '10';
+  carbs.dispatchEvent(new Event('input'));
+  form.dispatchEvent(new Event('submit', { cancelable: true }));
+  expect(create).toHaveBeenCalledOnce();
+
+  click('#scan-btn');
+  await settle();
+  adapter.instances[0].decode('captured-code');
+  await settle();
+  const content = document.querySelector('#tab-content')!;
+  expect(content.textContent).toBe('Found: Scanned apple');
+
+  pending.resolve({ food: food('New apple') });
+  await settle();
+  expect(document.querySelector('#modal-food-name')!.textContent).toBe('New apple');
+  expect(content.textContent).toBe('Found: Scanned apple');
+});

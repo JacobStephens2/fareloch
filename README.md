@@ -16,7 +16,7 @@ See [FARELOCH-NAME.md](./FARELOCH-NAME.md) for the rename decision record.
 - **Barcode scanner** — scan packaged foods using device camera
 - **Custom foods** — create your own foods with manual macro entry, auto-calculated calories
 - **Recipes** — build from ingredients or enter macros manually, custom serving units
-- **Weight tracking** — log weight with trend chart (Chart.js)
+- **Weight tracking** - log weight and optional navel waist circumference, with a trend chart and a personal Waist-Thermostat ceiling
 - **Copy previous day** — one-tap meal duplication for repetitive diets
 - **Tap to edit, swipe to delete** — touch-friendly meal management
 - **CSV export** — download meal logs and weight data
@@ -32,6 +32,9 @@ See [FARELOCH-NAME.md](./FARELOCH-NAME.md) for the rename decision record.
 
 ## Development
 
+Use Node.js 22 or 26. CI installs, typechecks, tests and builds both packages on
+both versions, then starts the compiled API and checks `/api/health`.
+
 ```bash
 # Frontend
 npm install
@@ -43,6 +46,29 @@ npm install
 npx tsc              # Compile TypeScript
 node dist/index.js   # Runs on :3457
 ```
+
+From the repository root, run `npm --prefix server run build` followed by
+`npm run test:server-start` to check startup with a temporary database and a
+test JWT secret. The check fails on startup deprecation warnings and removes
+its temporary data when it finishes.
+
+### Launcher icons
+
+`public/logo.svg` is the artwork source for `scripts/generate-icons.mjs`.
+The mark is a bold Fareloch **F** inside an enclosed basin, with the three macro
+colors beneath it. The monogram replaces the abstract water shape so the icon
+has a clear identity at Android launcher sizes, while retaining the enclosed
+loch motif and teal palette from [the naming record](./FARELOCH-NAME.md#8-visual-direction).
+After `npm ci`, run `npm run generate:icons` to regenerate the checked-in web,
+legacy Android, and adaptive Android icons with the locked Sharp dependency.
+Keep the SVG's `background` ID on the background rectangle: the generator hides
+it for the transparent adaptive foreground while retaining the existing Android
+background layer (`android/app/src/main/res/drawable/ic_launcher_bg.xml`).
+
+The adaptive foreground layers are 108dp (108/162/216/324/432px across the five
+densities). The Fareloch monogram, enclosure and macro dots fit inside the
+central 66dp safe circle. Run `npx vitest run src/launcher-icons.test.ts` to check transparent
+padding, circle and squircle masks, and reproducible generation.
 
 Environment variables for the server (set in systemd service or `.env`):
 

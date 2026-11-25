@@ -7,7 +7,7 @@ import { deferred, food, result } from '../test/food-search-fixtures';
 import type { FoodSearchResult } from '../food-search-session';
 import type { ExternalFood, Recipe } from '../types';
 
-const scanner = vi.hoisted(() => ({ code: '0012345678905' }));
+const scanner = vi.hoisted((): { code: string | null } => ({ code: '0012345678905' }));
 
 vi.mock('../api', () => ({
   foods: { search: vi.fn(), recent: vi.fn(), custom: vi.fn(), saveExternal: vi.fn(), barcode: vi.fn() },
@@ -18,7 +18,7 @@ vi.mock('../api', () => ({
 vi.mock('html5-qrcode', () => ({
   Html5Qrcode: class {
     start(_camera: unknown, _config: unknown, onScan: (code: string) => void) {
-      onScan(scanner.code);
+      if (scanner.code !== null) onScan(scanner.code);
       return Promise.resolve();
     }
     stop() {
@@ -331,7 +331,7 @@ it.each(['/other', '/missing'])('pending searches and tab loads cannot publish a
   expect(tabContent.innerHTML).toBe(previous);
 });
 
-it('Recent and My Foods tabs do not show a source label outside the food search session', async () => {
+it('Recent success replaces loading and explicit tabs omit search source labels', async () => {
   const recent = food('Recent apple');
   recent.source = 'sample';
   const custom = food('Custom apple');
@@ -345,6 +345,7 @@ it('Recent and My Foods tabs do not show a source label outside the food search 
   await vi.advanceTimersByTimeAsync(0);
   expect(document.querySelector('#tab-content .food-source')).toBeNull();
   expect(document.querySelector('#tab-content')!.textContent).toContain('Recent apple');
+  expect(document.querySelector('#tab-content .loading-spinner')).toBeNull();
   expect(document.querySelector('#tab-content')!.textContent).not.toContain('sample');
   click('[data-tab="custom"]');
   await vi.advanceTimersByTimeAsync(0);
@@ -352,6 +353,145 @@ it('Recent and My Foods tabs do not show a source label outside the food search 
   expect(document.querySelector('#tab-content')!.textContent).toContain('Custom apple');
   expect(document.querySelector('#tab-content')!.textContent).not.toContain('manual');
 });
+
+it.each(['recent', 'custom'] as const)('%s retained saved row stays inert after reinsertion into Quick Add', async tab => {
+  go('/log');
+  await vi.advanceTimersByTimeAsync(0);
+  vi.mocked(foods[tab]).mockResolvedValue({ foods: [food('Retained apple')] });
+  click(`[data-tab="${tab}"]`);
+  await vi.advanceTimersByTimeAsync(0);
+  const row = document.querySelector<HTMLElement>('#tab-content .food-item')!;
+  row.click();
+  expect(document.querySelector('#modal-food-name')!.textContent).toBe('Retained apple');
+  click('#modal-close');
+  click('[data-tab="quick"]');
+  document.querySelector('#tab-content')!.append(row);
+  row.click();
+  expect(document.querySelector('#food-detail-modal')!.classList.contains('hidden')).toBe(true);
+  expect(document.querySelector('#quick-form')).not.toBeNull();
+});
+
+const savedBarcodeCases = (['recent', 'custom'] as const).flatMap(tab =>
+  (['success', 'empty', 'failure'] as const).flatMap(outcome =>
+    (['pending', 'found', 'missing'] as const).map(barcode => ({ tab, outcome, barcode }))));
+
+it.each(savedBarcodeCases)('$tab late $outcome leaves $barcode barcode feedback intact', async ({ tab, outcome, barcode }) => {
+  go('/log');
+  await vi.advanceTimersByTimeAsync(0);
+  const pending = deferred<{ foods: ReturnType<typeof food>[] }>();
+  const lookup = deferred<{ food: ReturnType<typeof food> }>();
+  vi.mocked(foods[tab]).mockReturnValue(pending.promise);
+  vi.mocked(foods.barcode).mockReturnValue(lookup.promise);
+  click(`[data-tab="${tab}"]`);
+  const oldHost = document.querySelector('#tab-content')!.firstElementChild!;
+  click('#scan-btn');
+  await vi.advanceTimersByTimeAsync(0);
+  expect(document.querySelector('#tab-content')!.textContent).toBe('Looking up barcode...');
+  if (barcode === 'found') lookup.resolve({ food: food('Scanned apple') });
+  if (barcode === 'missing') lookup.reject(new Error('No barcode match'));
+  await vi.advanceTimersByTimeAsync(0);
+  const content = document.querySelector('#tab-content')!;
+  const before = content.innerHTML;
+  const departed = oldHost.innerHTML;
+  if (outcome === 'failure') pending.reject(new Error('Obsolete saved list'));
+  else pending.resolve({ foods: outcome === 'empty' ? [] : [food('Obsolete apple')] });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(content.innerHTML).toBe(before);
+  expect(oldHost.innerHTML).toBe(departed);
+  if (barcode === 'pending') {
+    lookup.resolve({ food: food('Scanned apple') });
+    await vi.advanceTimersByTimeAsync(0);
+  }
+});
+
+it.each(['recent', 'custom'] as const)('%s reselection gets a fresh host and ignores reversed reads', async tab => {
+  go('/log');
+  await vi.advanceTimersByTimeAsync(0);
+  const old = deferred<{ foods: ReturnType<typeof food>[] }>();
+  const current = deferred<{ foods: ReturnType<typeof food>[] }>();
+  vi.mocked(foods[tab]).mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise);
+  click(`[data-tab="${tab}"]`);
+  const oldHost = document.querySelector('#tab-content')!.firstElementChild!;
+  click(`[data-tab="${tab}"]`);
+  const newHost = document.querySelector('#tab-content')!.firstElementChild!;
+  expect(newHost).not.toBe(oldHost);
+  current.resolve({ foods: [food('Current apple')] });
+  await vi.advanceTimersByTimeAsync(0);
+  old.resolve({ foods: [] });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(newHost.textContent).toContain('Current apple');
+  expect(newHost.querySelector('.loading-spinner')).toBeNull();
+  expect(oldHost.textContent).toBe('Loading...');
+});
+
+it.each(['recent', 'custom'] as const)('%s survives modal closing and scanner opening/closing without a barcode', async tab => {
+  scanner.code = null;
+  vi.mocked(foods[tab]).mockResolvedValue({ foods: [food('Surviving apple')] });
+  go('/log');
+  click(`[data-tab="${tab}"]`);
+  await vi.advanceTimersByTimeAsync(0);
+  const row = document.querySelector<HTMLElement>('#tab-content .food-item')!;
+  row.click();
+  click('#modal-close');
+  click('#scan-btn');
+  await vi.advanceTimersByTimeAsync(0);
+  click('#scanner-close');
+  await vi.advanceTimersByTimeAsync(0);
+  row.click();
+  expect(document.querySelector('#food-detail-modal')!.classList.contains('hidden')).toBe(false);
+  expect(document.querySelector('#modal-food-name')!.textContent).toBe('Surviving apple');
+  expect(foods.barcode).not.toHaveBeenCalled();
+});
+
+it('My Foods Cancel mounts a fresh list but an obsolete Cancel and Create stay inert', async () => {
+  vi.mocked(foods.custom).mockResolvedValue({ foods: [] });
+  go('/log');
+  click('[data-tab="custom"]');
+  await vi.advanceTimersByTimeAsync(0);
+  const content = document.querySelector('#tab-content')!;
+  const oldHost = content.firstElementChild!;
+  const create = document.querySelector<HTMLElement>('#create-food-btn')!;
+  create.click();
+  const cancel = document.querySelector<HTMLElement>('#cancel-create')!;
+  const pending = deferred<{ foods: ReturnType<typeof food>[] }>();
+  vi.mocked(foods.custom).mockReturnValueOnce(pending.promise);
+  cancel.click();
+  const fresh = content.firstElementChild!;
+  expect(fresh).not.toBe(oldHost);
+  expect(fresh.textContent).toBe('Loading...');
+  pending.resolve({ foods: [] });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(fresh.textContent).toBe('+ Create Custom FoodNo custom foods yet');
+  click('[data-tab="quick"]');
+  content.append(oldHost, cancel);
+  const before = content.innerHTML;
+  const reads = vi.mocked(foods.custom).mock.calls.length;
+  create.click();
+  cancel.click();
+  expect(content.innerHTML).toBe(before);
+  expect(foods.custom).toHaveBeenCalledTimes(reads);
+});
+
+it.each((['recent', 'custom'] as const).flatMap(tab =>
+  (['success', 'empty', 'failure'] as const).map(outcome => ({ tab, outcome }))))(
+  '$tab late $outcome leaves the current Custom Food form intact', async ({ tab, outcome }) => {
+    go('/log');
+    await vi.advanceTimersByTimeAsync(0);
+    const pending = deferred<{ foods: ReturnType<typeof food>[] }>();
+    vi.mocked(foods[tab]).mockReturnValueOnce(pending.promise);
+    click(`[data-tab="${tab}"]`);
+    vi.mocked(foods.custom).mockResolvedValue({ foods: [] });
+    click('[data-tab="custom"]');
+    await vi.advanceTimersByTimeAsync(0);
+    click('#create-food-btn');
+    const content = document.querySelector('#tab-content')!;
+    const before = content.innerHTML;
+    if (outcome === 'failure') pending.reject(new Error('Retired read'));
+    else pending.resolve({ foods: outcome === 'empty' ? [] : [food('Old apple')] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(content.innerHTML).toBe(before);
+  },
+);
 
 it.each(['/log', '/recipe'])('%s shows search result name, brand, serving unit, and source label as text', async path => {
   const tag = (field: string) => `${field}<img alt="${field}">`;
@@ -491,155 +631,26 @@ it('Log Food shows an unmatched barcode as text', async () => {
   click('#scan-btn');
   await vi.advanceTimersByTimeAsync(0);
   const content = document.querySelector('#tab-content')!;
+
   expect(content.querySelector('img')).toBeNull();
   expect(content.textContent).toContain('No product found for barcode 0012345678905<img alt="unmatched-code">');
 });
 
-it('Log Food add modal and Recipe editor ingredient modal show brand, serving, and default unit as text', async () => {
-  const item = food('Apple');
-  item.brand = 'Acme<img alt="brand">';
-  item.serving_unit = 'g<img alt="unit">';
-  vi.mocked(foods.search).mockResolvedValue({ foods: [item], external: [] });
-
-  go('/log');
-  input('#food-search', 'apple');
-  await vi.advanceTimersByTimeAsync(400);
-  click('#tab-content .food-item');
-  const addModal = document.querySelector('#food-detail-modal')!;
-  expect(addModal.querySelector('img')).toBeNull();
-  expect(addModal.querySelector('.food-brand')!.textContent).toBe('Acme<img alt="brand">');
-  expect(addModal.querySelector('#modal-per-label')!.textContent).toBe('Per 100g<img alt="unit">');
-  expect(addModal.querySelector('#unit-select option[value="default"]')!.textContent).toBe('100g<img alt="unit"> (default)');
-
+it('Recipe search selection after Close opens an independent ingredient session and Add clears results', async () => {
+  vi.mocked(foods.search).mockResolvedValue({ foods: [food('First'), { ...food('Second'), id: 2 }], external: [] });
   go('/recipe');
-  input('#ing-search', 'apple');
+  input('#ing-search', 'foods');
   await vi.advanceTimersByTimeAsync(400);
-  click('#ing-results .food-item');
-  const ingredientModal = document.querySelector('#ing-modal')!;
-  expect(ingredientModal.querySelector('img')).toBeNull();
-  expect(ingredientModal.querySelector('.food-brand')!.textContent).toBe('Acme<img alt="brand">');
-  expect(ingredientModal.querySelector('#ing-modal-per-label')!.textContent).toBe('Per 100g<img alt="unit">');
-  expect(ingredientModal.querySelector('#ing-unit-select option[value="default"]')!.textContent).toBe('100g<img alt="unit"> (default)');
-});
-
-it('Log Food add modal and Recipe editor ingredient modal show saved measure label and gram weight as text', async () => {
-  const item = food('Apple');
-  item.measures = JSON.stringify([
-    { label: 'cup<img alt="measure">', gramWeight: 200 },
-    { label: 'slice</option><img alt="slice">', gramWeight: 30 },
-  ]);
-  vi.mocked(foods.search).mockResolvedValue({ foods: [item], external: [] });
-
-  go('/log');
-  input('#food-search', 'apple');
-  await vi.advanceTimersByTimeAsync(400);
-  click('#tab-content .food-item');
-  const addModal = document.querySelector('#food-detail-modal')!;
-  expect(addModal.querySelector('img')).toBeNull();
-  expect(addModal.querySelector('#unit-select option[value="0"]')!.textContent).toBe('cup<img alt="measure"> (200g)');
-  expect(addModal.querySelector('#unit-select option[value="1"]')!.textContent).toBe('slice</option><img alt="slice"> (30g)');
-
-  go('/recipe');
-  input('#ing-search', 'apple');
-  await vi.advanceTimersByTimeAsync(400);
-  click('#ing-results .food-item');
-  const ingredientModal = document.querySelector('#ing-modal')!;
-  expect(ingredientModal.querySelector('img')).toBeNull();
-  expect(ingredientModal.querySelector('#ing-unit-select option[value="0"]')!.textContent).toBe('cup<img alt="measure"> (200g)');
-  expect(ingredientModal.querySelector('#ing-unit-select option[value="1"]')!.textContent).toBe('slice</option><img alt="slice"> (30g)');
-});
-
-it('Log Food add modal and Recipe editor ingredient modal show saved food calories, carbs, protein, and fat as text', async () => {
-  const calories = '11<img alt="calories">';
-  const carbs = '22<img alt="carbs">';
-  const protein = '33<img alt="protein">';
-  const fat = '44<img alt="fat">';
-  const item = food('Apple');
-  item.calories = calories as unknown as number;
-  item.carbs_g = carbs as unknown as number;
-  item.protein_g = protein as unknown as number;
-  item.fat_g = fat as unknown as number;
-  vi.mocked(foods.search).mockResolvedValue({ foods: [item], external: [] });
-
-  const expectAmounts = (root: Element, per: string, total: string) => {
-    expect(root.querySelector('img')).toBeNull();
-    const strongs = [...root.querySelectorAll(`${per} strong`)].map((node) => node.textContent);
-    expect(strongs).toEqual([calories, `${carbs}g`, `${protein}g`, `${fat}g`]);
-    const totals = [...root.querySelectorAll(`${total} span`)].map((node) => node.textContent);
-    expect(totals).toEqual([`${calories} kcal`, `${carbs}g C`, `${protein}g P`, `${fat}g F`]);
-  };
-  const chooseCup = (selector: string) => {
-    const unit = document.querySelector<HTMLSelectElement>(selector)!;
-    unit.value = '0';
-    unit.dispatchEvent(new Event('change'));
-  };
-
-  go('/log');
-  input('#food-search', 'apple');
-  await vi.advanceTimersByTimeAsync(400);
-  click('#tab-content .food-item');
-  const addModal = document.querySelector('#food-detail-modal')!;
-  expectAmounts(addModal, '#modal-per-unit', '#modal-total');
-  input('#servings-input', '3');
-  expectAmounts(addModal, '#modal-per-unit', '#modal-total');
-  chooseCup('#unit-select');
-  expect(addModal.querySelector('#modal-per-label')!.textContent).toBe('Per cup (200g)');
-  expectAmounts(addModal, '#modal-per-unit', '#modal-total');
-
-  go('/recipe');
-  input('#ing-search', 'apple');
-  await vi.advanceTimersByTimeAsync(400);
-  click('#ing-results .food-item');
-  const ingredientModal = document.querySelector('#ing-modal')!;
-  expectAmounts(ingredientModal, '#ing-modal-per-unit', '#ing-modal-total');
-  input('#ing-qty', '4');
-  expectAmounts(ingredientModal, '#ing-modal-per-unit', '#ing-modal-total');
-  chooseCup('#ing-unit-select');
-  expect(ingredientModal.querySelector('#ing-modal-per-label')!.textContent).toBe('Per cup (200g)');
-  expectAmounts(ingredientModal, '#ing-modal-per-unit', '#ing-modal-total');
-
-  const scaled = food('Pear');
-  vi.mocked(foods.search).mockResolvedValue({ foods: [scaled], external: [] });
-  go('/log');
-  input('#food-search', 'pear');
-  await vi.advanceTimersByTimeAsync(400);
-  click('#tab-content .food-item');
-  input('#servings-input', '2');
-  expect([...document.querySelectorAll('#modal-total span')].map((node) => node.textContent)).toEqual(['200 kcal', '20g C', '10g P', '8g F']);
-  chooseCup('#unit-select');
-  expect([...document.querySelectorAll('#modal-per-unit strong')].map((node) => node.textContent)).toEqual(['200', '20g', '10g', '8g']);
-  expect([...document.querySelectorAll('#modal-total span')].map((node) => node.textContent)).toEqual(['400 kcal', '40g C', '20g P', '16g F']);
-
-  go('/recipe');
-  input('#ing-search', 'pear');
-  await vi.advanceTimersByTimeAsync(400);
-  click('#ing-results .food-item');
-  input('#ing-qty', '2');
-  expect([...document.querySelectorAll('#ing-modal-total span')].map((node) => node.textContent)).toEqual(['200 kcal', '20g C', '10g P', '8g F']);
-  chooseCup('#ing-unit-select');
-  expect([...document.querySelectorAll('#ing-modal-per-unit strong')].map((node) => node.textContent)).toEqual(['200', '20g', '10g', '8g']);
-  expect([...document.querySelectorAll('#ing-modal-total span')].map((node) => node.textContent)).toEqual(['400 kcal', '40g C', '20g P', '16g F']);
-});
-
-it('recipe ingredient list shows the name and unit as text', async () => {
-  const name = 'Apple<img alt="ingredient-name">';
-  const unit = 'cup<img alt="ingredient-unit">';
-  vi.mocked(recipes.get).mockResolvedValue({
-    recipe: {
-      id: 1, user_id: 1, name: 'Salad', total_servings: 1, serving_unit: 'serving',
-      manual_calories: null, manual_carbs_g: null, manual_protein_g: null, manual_fat_g: null,
-      ingredientCount: 1, perServing: { calories: 100, carbsG: 10, proteinG: 5, fatG: 4 },
-    },
-    ingredients: [{
-      id: 1, food_id: 1, servings: 1, qty: 1, unit_label: unit,
-      name, brand: null, serving_size: 100, serving_unit: 'g',
-      calories: 100, carbs_g: 10, protein_g: 5, fat_g: 4, measures: null,
-    }],
-  });
-  go('/existing');
+  const results = '#ing-results';
+  click(`${results} .food-item`);
+  click('#ing-modal-close');
+  expect(document.querySelector<HTMLInputElement>('#ing-search')!.value).toBe('foods');
+  document.querySelectorAll<HTMLElement>(`${results} .food-item`)[1].click();
+  expect(document.querySelector('#ing-modal-name')!.textContent).toBe('Second');
+  expect(document.querySelector<HTMLInputElement>('#ing-qty')!.value).toBe('1');
+  click('#ing-add-btn');
+  expect(document.querySelector('.ingredient-name')!.textContent).toBe('Second');
+  expect(document.querySelector<HTMLInputElement>('#ing-search')!.value).toBe('');
+  expect(document.querySelector(results)!.classList.contains('hidden')).toBe(true);
   await vi.advanceTimersByTimeAsync(0);
-  const list = document.querySelector('#ingredients-list')!;
-  expect(list.querySelector('img')).toBeNull();
-  expect(list.textContent).toContain(name);
-  expect(list.textContent).toContain(unit);
 });

@@ -1,4 +1,6 @@
-import type { User, Food, ExternalFood, MealLog, Recipe, RecipeIngredient, WeightLog } from './types';
+import { Capacitor } from '@capacitor/core';
+import type { User, Food, ExternalFood, MealLog, Recipe, RecipeIngredient, WeightLog, WeightLogInput } from './types';
+import type { DailyCheckKey } from '../server/src/daily-checks';
 import {
   isGuestMode,
   clearGuestData,
@@ -8,9 +10,11 @@ import {
   localRecipes,
   localWeight,
   localWorkoutDays,
+  localDailyChecks,
 } from './local-db';
 
-export const API_BASE: string = (import.meta.env.VITE_API_BASE as string | undefined) || '/api';
+export const API_BASE: string = import.meta.env.VITE_API_BASE
+  || (Capacitor.isNativePlatform() ? 'https://fareloch.app/api' : '/api');
 
 const TOKEN_KEY = 'mt_token';
 
@@ -36,6 +40,21 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+async function readResponse<T>(res: Response): Promise<T> {
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    throw new Error(`The server returned an unexpected response (HTTP ${res.status}). Please try again.`);
+  }
+  if (!res.ok) {
+    throw new Error(typeof data?.error === 'string' && data.error
+      ? data.error
+      : `Request failed (HTTP ${res.status}). Please try again.`);
+  }
+  return data;
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,
@@ -52,9 +71,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     throw new Error('Not authenticated');
   }
 
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Request failed');
-  return data;
+  return readResponse<T>(res);
 }
 
 // Like request() but doesn't redirect to login on 401 (for endpoints that support optional auth)
@@ -69,9 +86,7 @@ async function requestNoAuthRedirect<T>(path: string, options?: RequestInit): Pr
     credentials: 'include',
   });
 
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Request failed');
-  return data;
+  return readResponse<T>(res);
 }
 
 // Auth
@@ -145,23 +160,28 @@ export const auth = {
 // Saving an external food on the server requires a signed-in caller.
 // Guest mode stores that save on this device, and uses local-db for recent, custom, create, and delete.
 export const foods = {
-  search: (q: string) => {
-    if (!isGuestMode()) {
-      return request<{ foods: Food[]; external: ExternalFood[] }>(`/foods/search?q=${encodeURIComponent(q)}`);
+  search: async (q: string, onSaved?: (foods: Food[]) => void): Promise<{ foods: Food[]; external: ExternalFood[] }> => {
+    const guest = isGuestMode();
+    const path = `/foods/search?q=${encodeURIComponent(q)}`;
+    let completed = false;
+    const saved = (guest ? localFoods.search(q)
+      : onSaved ? request<{ foods: Food[] }>(`${path}&savedOnly=true`)
+      : Promise.resolve<{ foods: Food[] }>({ foods: [] }))
+      .then(result => {
+        if (!completed && result.foods.length) onSaved?.(result.foods);
+        return result.foods;
+      }).catch((): Food[] => []);
+
+    try {
+      const remote = await (guest ? requestNoAuthRedirect : request)<{ foods: Food[]; external: ExternalFood[] }>(path);
+      completed = true;
+      return { foods: guest ? await saved : remote.foods, external: remote.external };
+    } catch (error) {
+      const foods = await saved;
+      completed = true;
+      if (guest || foods.length) return { foods, external: [] };
+      throw error;
     }
-    // Merge local custom foods with server external results
-    return (async () => {
-      const [local, remote] = await Promise.allSettled([
-        localFoods.search(q),
-        requestNoAuthRedirect<{ foods: Food[]; external: ExternalFood[] }>(`/foods/search?q=${encodeURIComponent(q)}`),
-      ]);
-      const localResult = local.status === 'fulfilled' ? local.value : { foods: [], external: [] };
-      const remoteResult = remote.status === 'fulfilled' ? remote.value : { foods: [], external: [] };
-      return {
-        foods: localResult.foods,
-        external: remoteResult.external,
-      };
-    })();
   },
 
   barcode: async (code: string) => {
@@ -352,6 +372,22 @@ export const recipes = {
       : request<{ recipe: { id: number } }>(`/recipes/${id}/copy`, { method: 'POST' }),
 };
 
+// Daily checks
+export const dailyChecks = {
+  get: (date: string) =>
+    isGuestMode()
+      ? localDailyChecks.get(date)
+      : request<{ checks: string[] }>(`/daily-checks/${date}`),
+
+  set: (date: string, key: DailyCheckKey, checked: boolean) =>
+    isGuestMode()
+      ? localDailyChecks.set(date, key, checked)
+      : request<{ checks: string[] }>(`/daily-checks/${date}`, {
+          method: 'PUT',
+          body: JSON.stringify({ key, checked }),
+        }),
+};
+
 // Workout days
 export const workoutDays = {
   get: (date: string) =>
@@ -375,12 +411,12 @@ export const weight = {
       ? localWeight.list(limit)
       : request<{ logs: WeightLog[] }>(`/weight${limit ? `?limit=${limit}` : ''}`),
 
-  log: (date: string, weightLbs: number, time?: string, notes?: string) =>
+  log: (entry: WeightLogInput) =>
     isGuestMode()
-      ? localWeight.log(date, weightLbs, time, notes)
+      ? localWeight.log(entry)
       : request<{ log: WeightLog }>('/weight', {
           method: 'POST',
-          body: JSON.stringify({ date, weightLbs, time, notes }),
+          body: JSON.stringify(entry),
         }),
 
   delete: (id: number) =>
