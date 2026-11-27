@@ -70,6 +70,24 @@ type MealCsvRow = Pick<JoinedMeal,
 
 type MealId = string | number | bigint;
 
+// The recipe id a meal may store. Another caller's recipe is not linkable, so
+// this returns null. A missing id is returned as given; the foreign key still
+// rejects it. Recipes have no unowned rows.
+function acceptedRecipeId(
+  db: Database.Database,
+  recipeId: unknown,
+  userId: number,
+): number | null {
+  if (recipeId == null || recipeId === '') return null;
+  const id = Number(recipeId);
+  const owned = db.prepare(
+    'SELECT id FROM recipes WHERE id = ? AND user_id = ?',
+  ).get(id, userId);
+  if (owned) return id;
+  const exists = db.prepare('SELECT id FROM recipes WHERE id = ?').get(id);
+  return exists ? null : id;
+}
+
 const mealInsertColumns = [
   'user_id', 'date', 'meal_type', 'food_id', 'recipe_id', 'servings', 'calories', 'carbs_g', 'protein_g', 'fat_g', 'note',
 ] as const;
@@ -77,11 +95,12 @@ const mealInsertColumnsWithUnit = [...mealInsertColumns, 'unit_label', 'unit_sca
 type CopySource = Omit<Pick<StoredMeal, typeof mealInsertColumns[number]>, 'user_id' | 'date'>;
 
 // The joined food is present only when the caller owns it or it has no owner.
+// The joined recipe is present only when it belongs to that same meal caller.
 // Queries using these joins bind the caller id for the food predicate first.
 const mealJoins = `
   FROM meal_logs m
   LEFT JOIN foods f ON m.food_id = f.id AND ${foodVisibleToCaller('f')}
-  LEFT JOIN recipes r ON m.recipe_id = r.id
+  LEFT JOIN recipes r ON m.recipe_id = r.id AND r.user_id = m.user_id
 `;
 
 const joinedMeals = `
@@ -170,11 +189,18 @@ export function logMeal(db: Database.Database, userId: number, input: MealLogInp
         linkedFoodId = acceptedFoodId(db, foodId, userId);
       }
     }
+    // Macros and the stored recipe id come from a recipe the caller owns.
+    let linkedRecipeId: number | null = null;
     if (recipeId) {
       const recipe = db.prepare<[number, number], RecipeRow & { id: number }>(
         'SELECT * FROM recipes WHERE id = ? AND user_id = ?',
       ).get(recipeId, userId);
-      if (recipe) macros = scaleMacros(recipePerServing(recipe, recipeIngredientRows(db, recipe, userId)), finalServings);
+      if (recipe) {
+        macros = scaleMacros(recipePerServing(recipe, recipeIngredientRows(db, recipe, userId)), finalServings);
+        linkedRecipeId = Number(recipeId);
+      } else {
+        linkedRecipeId = acceptedRecipeId(db, recipeId, userId);
+      }
     }
 
     const insert = prepareMealInsert(db, mealInsertColumnsWithUnit);
@@ -183,7 +209,7 @@ export function logMeal(db: Database.Database, userId: number, input: MealLogInp
       date,
       meal_type: mealType,
       food_id: linkedFoodId,
-      recipe_id: recipeId || null,
+      recipe_id: linkedRecipeId,
       servings: finalServings,
       ...macroColumns(roundMacros(macros, 'stored')),
       note: note || null,
@@ -250,8 +276,14 @@ export function copyMeals(db: Database.Database, userId: number, fromDate: strin
 
     const insert = prepareMealInsert(db, mealInsertColumns);
     for (const meal of source) {
-      // A copied day does not keep a link to another caller's food; stored macros stay.
-      insert({ ...meal, food_id: acceptedFoodId(db, meal.food_id, userId), user_id: userId, date: toDate });
+      // A copied day does not keep a link to another caller's food or recipe; stored macros stay.
+      insert({
+        ...meal,
+        food_id: acceptedFoodId(db, meal.food_id, userId),
+        recipe_id: acceptedRecipeId(db, meal.recipe_id, userId),
+        user_id: userId,
+        date: toDate,
+      });
     }
 
     return source.length;
