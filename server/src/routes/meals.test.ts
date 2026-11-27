@@ -215,10 +215,14 @@ it('logs and reads Food, Recipe and manual meals with existing precedence, round
 
   const foodFallback = await log({ date, mealType: 'breakfast', foodId: 10, recipeId: 21, calories: 999 });
   expect(foodFallback).toMatchObject({
-    recipe_id: 21, recipe_name: 'Other recipe', servings: 1, calories: 80.3, carbs_g: 13.2, protein_g: 4.5, fat_g: 1.3,
+    food_id: 10, recipe_id: null, recipe_name: null, servings: 1, calories: 80.3, carbs_g: 13.2, protein_g: 4.5, fat_g: 1.3,
   });
+  expect(JSON.stringify(foodFallback)).not.toContain('Other recipe');
   const manualFallback = await log({ date, mealType: 'snack', recipeId: 21, servings: 2, calories: 47.44 });
-  expect(manualFallback).toMatchObject({ recipe_id: 21, recipe_name: 'Other recipe', servings: 2, calories: 47.4 });
+  expect(manualFallback).toMatchObject({ recipe_id: null, recipe_name: null, servings: 2, calories: 47.4 });
+  expect(JSON.stringify(manualFallback)).not.toContain('Other recipe');
+  expect(getDb().prepare('SELECT recipe_id FROM meal_logs WHERE id = ?').get(foodFallback.id)).toEqual({ recipe_id: null });
+  expect(getDb().prepare('SELECT recipe_id FROM meal_logs WHERE id = ?').get(manualFallback.id)).toEqual({ recipe_id: null });
 
   const other = await log({ date, mealType: 'breakfast', recipeId: 21 }, otherToken);
   expect(other).toMatchObject({
@@ -230,6 +234,46 @@ it('logs and reads Food, Recipe and manual meals with existing precedence, round
     { ...foodFallback, created_at: '2020-01-01 00:00:00' }, food, recipe, manual, manualFallback,
   ]);
   expect(await meals(date, otherToken)).toEqual([other]);
+});
+
+it('returns a stored meal Recipe only when that Recipe belongs to the caller', async () => {
+  getDb().prepare(`
+    INSERT INTO meal_logs (user_id, date, meal_type, recipe_id, servings, calories, carbs_g, protein_g, fat_g, note)
+    VALUES (1, ?, 'lunch', 21, 1, 12, 1, 1, 1, 'linked elsewhere'),
+           (1, ?, 'dinner', 20, 1, 12, 1, 1, 1, 'own recipe')
+  `).run(date, date);
+
+  const listed = await meals();
+  const byNote = Object.fromEntries(listed.map(meal => [meal.note, meal]));
+  expect(byNote['own recipe']).toMatchObject({ recipe_id: 20, recipe_name: 'Oat bake' });
+  expect(byNote['linked elsewhere']).toMatchObject({ recipe_id: null, recipe_name: null });
+  expect(JSON.stringify(listed)).not.toContain('Other recipe');
+
+  const csv = await request('GET', '/export/csv');
+  expect(csv.status).toBe(200);
+  const text = await csv.text();
+  expect(text).toContain('Oat bake');
+  expect(text).not.toContain('Other recipe');
+});
+
+it('does not return another caller Recipe id when reading or editing a stored meal', async () => {
+  const inserted = getDb().prepare(`
+    INSERT INTO meal_logs (user_id, date, meal_type, recipe_id, servings, calories, carbs_g, protein_g, fat_g, note)
+    VALUES (1, ?, 'lunch', 21, 1, 12, 1, 1, 1, 'linked elsewhere')
+  `).run(date);
+  const id = Number(inserted.lastInsertRowid);
+
+  const listed = await meals();
+  expect(listed).toHaveLength(1);
+  expect(listed[0]).toMatchObject({ recipe_id: null, recipe_name: null, note: 'linked elsewhere' });
+  expect(JSON.stringify(listed)).not.toContain('Other recipe');
+  expect(JSON.stringify(listed)).not.toContain('"recipe_id":21');
+
+  const updated = await json('PUT', `/${id}`, { note: 'still linked' });
+  expect(updated.status).toBe(200);
+  expect(updated.body.meal).toMatchObject({ recipe_id: null, recipe_name: null, note: 'still linked' });
+  expect(JSON.stringify(updated.body)).not.toContain('Other recipe');
+  expect(JSON.stringify(updated.body)).not.toContain('"recipe_id":21');
 });
 
 it('keeps the Quick Add response bare and uses raw Macros, one serving and the name as the note', async () => {
@@ -273,6 +317,31 @@ it('preserves omitted and null edit fields, saves supplied zeroes and empty note
   expect(await json('DELETE', path)).toEqual({ status: 200, body: { success: true } });
   expect(await meals()).toEqual([]);
   expect(await meals(date, otherToken)).toEqual([other]);
+});
+
+it('copies a meal Recipe only when that Recipe belongs to the caller', async () => {
+  getDb().prepare(`
+    INSERT INTO meal_logs (user_id, date, meal_type, recipe_id, servings, calories, carbs_g, protein_g, fat_g, note)
+    VALUES (1, ?, 'lunch', 20, 2, 107.1, 17.7, 5.9, 1.7, 'own'),
+           (1, ?, 'snack', 21, 1, 47.4, 0, 0, 0, 'theirs')
+  `).run(date, date);
+  const source = await meals();
+
+  expect(await json('POST', '/copy', { fromDate: date, toDate: nextDate })).toEqual({
+    status: 200, body: { copied: 2 },
+  });
+  const copied = await meals(nextDate);
+  const byNote = Object.fromEntries(copied.map(meal => [meal.note, meal]));
+  expect(byNote.own).toMatchObject({ recipe_id: 20, recipe_name: 'Oat bake', calories: 107.1, carbs_g: 17.7, protein_g: 5.9, fat_g: 1.7 });
+  expect(byNote.theirs).toMatchObject({ recipe_id: null, recipe_name: null, calories: 47.4 });
+  expect(JSON.stringify(copied)).not.toContain('Other recipe');
+  expect(getDb().prepare(
+    'SELECT note, recipe_id FROM meal_logs WHERE user_id = 1 AND date = ? ORDER BY note'
+  ).all(nextDate)).toEqual([
+    { note: 'own', recipe_id: 20 },
+    { note: 'theirs', recipe_id: null },
+  ]);
+  expect(await meals()).toEqual(source);
 });
 
 it('appends a snapshot when copying onto the same date, with fresh identities and timestamps', async () => {
