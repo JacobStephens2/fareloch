@@ -95,7 +95,7 @@ const mealInsertColumnsWithUnit = [...mealInsertColumns, 'unit_label', 'unit_sca
 type CopySource = Omit<Pick<StoredMeal, typeof mealInsertColumns[number]>, 'user_id' | 'date'>;
 
 // The joined food is present only when the caller owns it or it has no owner.
-// The joined recipe is present only when it belongs to that same meal caller.
+// The joined recipe, including its id, is present only when it belongs to that meal's caller.
 // Queries using these joins bind the caller id for the food predicate first.
 const mealJoins = `
   FROM meal_logs m
@@ -104,7 +104,10 @@ const mealJoins = `
 `;
 
 const joinedMeals = `
-  SELECT m.*, f.name as food_name, f.brand as food_brand, f.serving_size, f.serving_unit,
+  SELECT m.id, m.user_id, m.date, m.meal_type, m.food_id, r.id AS recipe_id,
+         m.servings, m.calories, m.carbs_g, m.protein_g, m.fat_g, m.note,
+         m.unit_label, m.unit_scale, m.created_at,
+         f.name as food_name, f.brand as food_brand, f.serving_size, f.serving_unit,
          r.name as recipe_name
   ${mealJoins}
 `;
